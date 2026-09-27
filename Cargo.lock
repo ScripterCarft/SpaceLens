@@ -3967,6 +3967,7 @@ dependencies = [
  "num-traits",
  "once_cell",
  "pin-weak",
+ "raw-window-handle",
  "slint-macros",
  "unicode-segmentation",
  "vtable",
@@ -4113,6 +4114,7 @@ name = "spacelens"
 version = "0.1.0"
 dependencies = [
  "embed-resource",
+ "raw-window-handle",
  "slint",
  "slint-build",
  "spacelens-core",
@@ -4137,6 +4139,7 @@ version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
  "spacelens-core",
+ "windows",
  "windows-sys 0.61.2",
 ]
 

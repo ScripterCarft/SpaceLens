@@ -51,6 +51,9 @@ pub mod flags {
     /// Additional hard link of a file whose size is already counted at
     /// another link (MFT scan only).
     pub const HARDLINK: u16 = 1 << 9;
+    /// Removed after the scan (e.g. moved to the recycle bin). Its size has
+    /// been subtracted from all ancestors; views skip it and its subtree.
+    pub const DELETED: u16 = 1 << 10;
 }
 
 /// One file or directory. 40 bytes.
@@ -119,8 +122,8 @@ pub struct ScanIssue {
     pub code: u32,
 }
 
-/// Immutable scan result. Cheap to share via `Arc<Tree>`.
-#[derive(Debug)]
+/// Scan result. Shared via `Arc<Tree>`; only [`Tree::remove`] mutates it.
+#[derive(Clone, Debug)]
 pub struct Tree {
     pub(crate) nodes: Vec<Node>,
     pub(crate) dirs: Vec<DirInfo>,
@@ -162,6 +165,12 @@ impl Tree {
     #[inline]
     pub fn children(&self, id: NodeId) -> Range<NodeId> {
         self.dir_info(id).map_or(0..0, DirInfo::children)
+    }
+
+    /// Direct children that have not been removed.
+    #[inline]
+    pub fn live_children(&self, id: NodeId) -> impl Iterator<Item = NodeId> + '_ {
+        self.children(id).filter(|&c| !self.nodes[c as usize].has(flags::DELETED))
     }
 
     #[inline]
@@ -241,5 +250,49 @@ impl Tree {
     /// Number of files and directories below `id` (0/0 for files).
     pub fn counts(&self, id: NodeId) -> (u32, u32) {
         self.dir_info(id).map_or((0, 0), |d| (d.files, d.dirs))
+    }
+}
+
+/// What [`Tree::remove`] took away.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Removed {
+    pub size: u64,
+    pub alloc: u64,
+    pub files: u32,
+    pub dirs: u32,
+}
+
+impl Tree {
+    /// Marks `id` (and thereby its subtree) as removed and subtracts its
+    /// totals from every ancestor, so all views stay correct without a
+    /// rescan. Cost: O(depth). Returns `None` for the root or an item that
+    /// is already removed.
+    pub fn remove(&mut self, id: NodeId) -> Option<Removed> {
+        if id == Self::ROOT {
+            return None;
+        }
+        let node = *self.nodes.get(id as usize)?;
+        if node.has(flags::DELETED) || self.ancestry(id).iter().any(|&a| self.nodes[a as usize].has(flags::DELETED)) {
+            return None;
+        }
+        let (files, dirs) = match self.dir_info(id) {
+            Some(d) => (d.files, d.dirs + 1),
+            None => (1, 0),
+        };
+        let removed = Removed { size: node.size, alloc: node.alloc, files, dirs };
+
+        self.nodes[id as usize].flags |= flags::DELETED;
+        let mut cur = node.parent;
+        while let Some(n) = self.nodes.get_mut(cur as usize) {
+            n.size = n.size.saturating_sub(removed.size);
+            n.alloc = n.alloc.saturating_sub(removed.alloc);
+            let (parent, dir) = (n.parent, n.dir);
+            if let Some(d) = self.dirs.get_mut(dir as usize) {
+                d.files = d.files.saturating_sub(files);
+                d.dirs = d.dirs.saturating_sub(dirs);
+            }
+            cur = parent;
+        }
+        Some(removed)
     }
 }

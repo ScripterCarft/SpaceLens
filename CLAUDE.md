@@ -41,8 +41,9 @@ Release-Build. Tags `v*` erzeugen ein GitHub-Release (`release.yml`).
 ## Harte Regeln
 
 **Korrektheit & Sicherheit**
-- Scanner sind **nur lesend**. Dateien werden nie geöffnet, nur Verzeichnisse gelistet
-  (kein Sharing-Konflikt, kein Download von Cloud-Platzhaltern).
+- Scanner sind **nur lesend** (Löschen ist eine eigene, explizite Nutzeraktion).
+  Dateien werden nie geöffnet, nur Verzeichnisse gelistet (kein Sharing-Konflikt,
+  kein Download von Cloud-Platzhaltern).
 - Reparse-Points mit Name-Surrogate-Tag (Symlink, Junction, Mountpoint) werden
   **nie verfolgt** (Flag `NOT_FOLLOWED`). Cloud-Tags (OneDrive) sind keine Surrogates.
 - Pfade für Win32 immer verbatim (`\\?\`), Namen verlustfrei (WTF-8 in `core::names`).
@@ -52,6 +53,8 @@ Release-Build. Tags `v*` erzeugen ein GitHub-Release (`release.yml`).
 - Kein `unwrap()` außerhalb von Tests (Clippy `unwrap_used = deny`). Worker fangen
   Panics pro Verzeichnis (`catch_unwind`).
 - Jeder `unsafe`-Block hat einen `// SAFETY:`-Kommentar; Handles via `OwnedHandle`.
+- Löschen **ausschließlich** in den Papierkorb (`recycle.rs`), nie ohne Rückfrage und
+  nie an `core::safety` vorbei. Neue Schutzregeln immer mit Test.
 - Adminrechte nur über den dokumentierten Weg: Manifest `asInvoker` +
   `ShellExecuteExW("runas")`. Keine UAC-Umgehungen, keine Dienste/Tasks.
 

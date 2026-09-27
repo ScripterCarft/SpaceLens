@@ -8,8 +8,10 @@ eine einzelne `SpaceLens.exe`.
   Einträgen in ≈0,4 s, Hardlinks exakt einmal gezählt
 - Als Standardbenutzer: paralleler Verzeichnis-Scan, ≈600 000 Einträge in unter 1 s
 - ≈77 Bytes RAM pro Datei, ≈8 MB Grundverbrauch der Oberfläche
-- Nur lesend: öffnet keine Dateien, folgt keinen Junctions/Symlinks und lädt
-  keine OneDrive-Dateien herunter
+- Scannen ist rein lesend: öffnet keine Dateien, folgt keinen Junctions/Symlinks
+  und lädt keine OneDrive-Dateien herunter
+- Aufräumen nur über den Windows-Papierkorb (wiederherstellbar), immer mit
+  Rückfrage; Windows- und Systembereiche sind gesperrt bzw. mit Warnung versehen
 - Standardbenutzer oder Administrator (vollständiger Scan inklusive geschützter
   Ordner über die normale UAC-Abfrage)
 
@@ -36,6 +38,8 @@ Die Exe ist nicht signiert. Beim ersten Start kann Windows SmartScreen warnen
 | Im Explorer zeigen | Rechtsklick → *Im Explorer anzeigen* | |
 | Treemap | Maus darüber: Pfad + Größe · Klick: Eintrag markieren · Doppelklick: direkt hinspringen | |
 | Treemap ein-/ausblenden | *Ansicht* → *Treemap ausblenden* | |
+| Größte Dateien (aktueller Ordner) | **Größte Dateien** über der Tabelle · Doppelklick springt zum Ordner | |
+| In den Papierkorb | **In den Papierkorb …**, Rechtsklick oder *Bearbeiten* | `Entf` |
 
 Kommandozeile: `SpaceLens.exe --scan D:\` startet direkt einen Scan.
 

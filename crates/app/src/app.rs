@@ -17,9 +17,11 @@ use slint::{
     Color, ComponentHandle, Image, ModelRc, Rgb8Pixel, SharedPixelBuffer, SharedString, Timer, TimerMode, VecModel,
 };
 use spacelens_core::filetype::{self, Category};
+use spacelens_core::safety::{self, Guard};
 use spacelens_core::treemap::{Tile, Treemap};
 use spacelens_core::{NodeId, ScanError, ScanOptions, ScanOutcome, ScanProgress, Tree, flags, format, query};
 use spacelens_win::elevation::{self, RelaunchError};
+use spacelens_win::recycle::{self, RecycleReport};
 use spacelens_win::volumes::{self, Volume};
 use spacelens_win::{scanner_for, shell};
 
@@ -50,9 +52,20 @@ struct ScanJob {
     started: Instant,
 }
 
+/// Items being moved to the recycle bin on a worker thread.
+struct DeleteJob {
+    handle: JoinHandle<Result<RecycleReport, String>>,
+    items: Vec<(NodeId, String)>,
+    /// Table row to select afterwards (keeps the position for quick successive deletes).
+    row: i32,
+}
+
 struct State {
     tree: Option<Arc<Tree>>,
     job: Option<ScanJob>,
+    delete_job: Option<DeleteJob>,
+    /// Table shows "largest files" of `current` instead of its children.
+    view_largest: bool,
     volumes: Vec<Volume>,
     /// Directory shown in the contents table.
     current: NodeId,
@@ -67,6 +80,7 @@ pub struct App {
     poll_timer: Timer,
     treemap: RefCell<TreemapState>,
     treemap_timer: Timer,
+    delete_timer: Timer,
     elevated: bool,
     state: RefCell<State>,
 }
@@ -93,10 +107,13 @@ impl App {
             poll_timer: Timer::default(),
             treemap: RefCell::new(TreemapState::default()),
             treemap_timer: Timer::default(),
+            delete_timer: Timer::default(),
             elevated,
             state: RefCell::new(State {
                 tree: None,
                 job: None,
+                delete_job: None,
+                view_largest: false,
                 volumes: Vec::new(),
                 current: Tree::ROOT,
                 sort_column: 1,
@@ -126,6 +143,10 @@ impl App {
         bind!(&app, ui, on_entry_select => entry_select(row));
         bind!(&app, ui, on_entry_open => entry_open(row));
         bind!(&app, ui, on_entry_reveal => entry_reveal(row));
+        bind!(&app, ui, on_entry_delete => entry_delete(row));
+        bind!(&app, ui, on_delete_selected => delete_selected());
+        bind!(&app, ui, on_show_folder_view => show_folder_view());
+        bind!(&app, ui, on_show_largest => show_largest());
         bind!(&app, ui, on_entry_navigate => entry_navigate(key));
         bind!(&app, ui, on_sort_by => sort_by(column));
         bind!(&app, ui, on_show_about => show_about());
@@ -355,6 +376,7 @@ impl App {
         let (column, descending) = {
             let mut st = self.state.borrow_mut();
             st.current = dir;
+            st.view_largest = false;
             (st.sort_column, st.sort_descending)
         };
         self.entry_model.show(dir, sort_for_column(column, descending));
@@ -365,11 +387,34 @@ impl App {
         ui.set_sort_descending(descending);
         ui.set_tree_selected(tree_row.map_or(-1, |r| r as i32));
         ui.set_entry_selected(select.and_then(|id| self.entry_model.row_of(id)).map_or(-1, |r| r as i32));
-        ui.set_can_go_up(tree.parent(dir).is_some());
-        ui.set_location(tree.path(dir).into());
+        ui.set_view_largest(false);
+        self.update_location(&tree);
+        self.render_treemap();
+    }
 
+    /// Header above the table (path + totals) for the current view.
+    fn update_location(&self, tree: &Tree) {
+        let Some(ui) = self.ui() else { return };
+        let (dir, largest) = {
+            let st = self.state.borrow();
+            (st.current, st.view_largest)
+        };
         let n = tree.node(dir);
         let (files, dirs) = tree.counts(dir);
+        ui.set_can_go_up(largest || tree.parent(dir).is_some());
+        if largest {
+            ui.set_location(format!("Größte Dateien in {}", tree.path(dir)).into());
+            ui.set_location_info(
+                format!(
+                    "Die {} größten von {} Dateien  ·  Doppelklick springt zum Ordner der Datei",
+                    format::count(self.entry_model.len() as u64),
+                    format::count(u64::from(files))
+                )
+                .into(),
+            );
+            return;
+        }
+        ui.set_location(tree.path(dir).into());
         ui.set_location_info(
             format!(
                 "{} (belegt {})  ·  {} Dateien  ·  {} Ordner  ·  {} Einträge hier",
@@ -381,10 +426,37 @@ impl App {
             )
             .into(),
         );
-        self.render_treemap();
+    }
+
+    /// Number of entries listed in the "largest files" view.
+    const LARGEST_COUNT: usize = 1000;
+
+    fn show_largest(&self) {
+        let (tree, dir, column, descending) = {
+            let mut st = self.state.borrow_mut();
+            st.view_largest = true;
+            (st.tree.clone(), st.current, st.sort_column, st.sort_descending)
+        };
+        let Some(tree) = tree else { return };
+        let ids = query::largest_files(&tree, dir, Self::LARGEST_COUNT);
+        self.entry_model.show_list(ids, dir, sort_for_column(column, descending));
+        if let Some(ui) = self.ui() {
+            ui.set_view_largest(true);
+            ui.set_entry_selected(-1);
+            ui.invoke_focus_table();
+        }
+        self.update_location(&tree);
+    }
+
+    fn show_folder_view(&self) {
+        let current = self.state.borrow().current;
+        self.navigate_to(current, None);
     }
 
     fn go_up(&self) {
+        if self.state.borrow().view_largest {
+            return self.show_folder_view();
+        }
         let (tree, current) = {
             let st = self.state.borrow();
             (st.tree.clone(), st.current)
@@ -453,7 +525,7 @@ impl App {
                 self.tree_toggle(cur as i32);
                 return;
             }
-            NavKey::Back => return,
+            NavKey::Back | NavKey::Delete => return,
         };
         self.tree_select(target as i32);
     }
@@ -484,6 +556,11 @@ impl App {
         let n = tree.node(id);
         if n.is_dir() && !n.has(flags::NOT_FOLLOWED) {
             self.navigate_to(id, None);
+        } else if self.state.borrow().view_largest {
+            // From the list, jump to the file in its folder.
+            if let Some(parent) = tree.parent(id) {
+                self.navigate_to(parent, Some(id));
+            }
         } else {
             self.reveal(id);
         }
@@ -495,7 +572,7 @@ impl App {
         }
     }
 
-    fn entry_navigate(&self, key: NavKey) {
+    fn entry_navigate(self: &Rc<Self>, key: NavKey) {
         let Some(ui) = self.ui() else { return };
         let len = self.entry_model.len();
         let cur = ui.get_entry_selected();
@@ -519,6 +596,12 @@ impl App {
                 return;
             }
             NavKey::Right => return,
+            NavKey::Delete => {
+                if cur >= 0 {
+                    self.delete_row(cur);
+                }
+                return;
+            }
         };
         if len > 0 {
             self.entry_select(target);
@@ -558,6 +641,163 @@ impl App {
         let Some(tree) = self.state.borrow().tree.clone() else { return };
         if let Err(e) = shell::reveal_in_explorer(&tree.path(id)) {
             self.set_status(format!("Explorer konnte nicht geöffnet werden: {e}"));
+        }
+    }
+
+    // ----------------------------------------------------------- delete
+
+    fn delete_selected(self: &Rc<Self>) {
+        let row = self.ui().map_or(-1, |ui| ui.get_entry_selected());
+        if row >= 0 {
+            self.delete_row(row);
+        }
+    }
+
+    fn entry_delete(self: &Rc<Self>, row: i32) {
+        self.delete_row(row);
+    }
+
+    /// Guard check → confirmation → recycle on a worker thread.
+    fn delete_row(self: &Rc<Self>, row: i32) {
+        {
+            let st = self.state.borrow();
+            if st.job.is_some() || st.delete_job.is_some() {
+                drop(st);
+                self.set_status("Bitte warten, bis der laufende Vorgang abgeschlossen ist.");
+                return;
+            }
+        }
+        let tree = self.state.borrow().tree.clone();
+        let (Some(tree), Some(id)) = (tree, self.entry_model.id_at(row.max(0) as usize)) else { return };
+        let path = tree.path(id);
+        let guard = safety::guard(&tree, id);
+        if let Some(Guard::Blocked(why)) = guard {
+            shell::message_box("SpaceLens – Nicht löschbar", &format!("{path}\n\n{why}"), false);
+            return;
+        }
+
+        let node = tree.node(id);
+        let what = if node.is_dir() {
+            let (files, dirs) = tree.counts(id);
+            format!(
+                "Ordner mit {} Dateien in {} Unterordnern",
+                format::count(u64::from(files)),
+                format::count(u64::from(dirs))
+            )
+        } else {
+            "Datei".to_string()
+        };
+        let mut text = format!("In den Papierkorb verschieben?\n\n{path}\n{what}  ·  {}", format::bytes(node.size));
+        if node.has(flags::HARDLINK) {
+            text.push_str("\n\nHinweis: Hardlink – Speicher wird erst frei, wenn alle Links entfernt sind.");
+        }
+        if let Some(Guard::Warn(warning)) = guard {
+            text.push_str("\n\n⚠ ");
+            text.push_str(warning);
+        }
+        let owner = self.owner_hwnd();
+        if !shell::confirm(owner, "SpaceLens – In den Papierkorb", &text, guard.is_some()) {
+            return;
+        }
+
+        let items = vec![(id, path)];
+        let paths: Vec<String> = items.iter().map(|(_, p)| p.clone()).collect();
+        let spawned = std::thread::Builder::new().name("recycle".into()).spawn(move || recycle::recycle(&paths, owner));
+        let handle = match spawned {
+            Ok(h) => h,
+            Err(e) => return self.set_status(format!("Löschen konnte nicht gestartet werden: {e}")),
+        };
+        self.state.borrow_mut().delete_job = Some(DeleteJob { handle, items, row });
+        if let Some(ui) = self.ui() {
+            ui.set_deleting(true);
+        }
+        self.set_status("Wird in den Papierkorb verschoben …");
+
+        let weak = Rc::downgrade(self);
+        self.delete_timer.start(TimerMode::Repeated, POLL_INTERVAL, move || {
+            if let Some(app) = weak.upgrade() {
+                app.poll_delete();
+            }
+        });
+    }
+
+    fn poll_delete(&self) {
+        let finished = self.state.borrow().delete_job.as_ref().is_none_or(|j| j.handle.is_finished());
+        if !finished {
+            return;
+        }
+        self.delete_timer.stop();
+        let Some(job) = self.state.borrow_mut().delete_job.take() else { return };
+        if let Some(ui) = self.ui() {
+            ui.set_deleting(false);
+        }
+        let report = match job.handle.join() {
+            Ok(Ok(report)) => report,
+            Ok(Err(e)) => return self.set_status(format!("Löschen fehlgeschlagen: {e}")),
+            Err(_) => return self.set_status("Löschen fehlgeschlagen: interner Fehler."),
+        };
+
+        // Trust the file system, not the dialog outcome: the user may have
+        // skipped single items, or files may have been in use.
+        let gone: Vec<NodeId> =
+            job.items.iter().filter(|(_, path)| !recycle::exists(path)).map(|(id, _)| *id).collect();
+        if gone.is_empty() {
+            self.set_status(if report.aborted {
+                "Abgebrochen – nichts wurde verschoben."
+            } else {
+                "Konnte nicht verschoben werden (in Verwendung oder keine Berechtigung)."
+            });
+            return;
+        }
+        let removed = self.apply_removals(&gone);
+        let name = job.items.first().map_or_else(String::new, |(_, p)| p.clone());
+        self.set_status(format!(
+            "In den Papierkorb verschoben: {name}  ·  {} – der Platz wird frei, sobald der Papierkorb geleert wird",
+            format::bytes(removed.alloc)
+        ));
+        if let Some(ui) = self.ui() {
+            let len = self.entry_model.len() as i32;
+            ui.set_entry_selected(if len == 0 { -1 } else { job.row.min(len - 1) });
+            ui.invoke_focus_table();
+        }
+    }
+
+    /// Removes nodes from the tree in place and refreshes every view without
+    /// rescanning or losing the tree's expansion state.
+    fn apply_removals(&self, ids: &[NodeId]) -> spacelens_core::Removed {
+        let mut total = spacelens_core::Removed::default();
+        let Some(mut tree) = self.state.borrow_mut().tree.take() else { return total };
+        // Release the models' references so the tree is uniquely owned and
+        // can be edited without copying it.
+        drop(self.tree_model.take_tree());
+        drop(self.entry_model.take_tree());
+        let editable = Arc::make_mut(&mut tree);
+        for &id in ids {
+            if let Some(r) = editable.remove(id) {
+                total.size += r.size;
+                total.alloc += r.alloc;
+                total.files += r.files;
+                total.dirs += r.dirs;
+            }
+        }
+        self.state.borrow_mut().tree = Some(Arc::clone(&tree));
+        self.tree_model.put_tree(Arc::clone(&tree));
+        self.entry_model.put_tree(Arc::clone(&tree));
+        self.treemap.borrow_mut().legend_dir = None;
+        self.sync_tree_selection();
+        self.update_location(&tree);
+        self.render_treemap();
+        total
+    }
+
+    /// HWND of the main window, for owner-modal Windows dialogs.
+    fn owner_hwnd(&self) -> Option<isize> {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let ui = self.ui()?;
+        let handle = ui.window().window_handle();
+        match handle.window_handle().ok()?.as_raw() {
+            RawWindowHandle::Win32(h) => Some(h.hwnd.get()),
+            _ => None,
         }
     }
 
@@ -679,10 +919,11 @@ impl App {
             (st.tree.clone(), st.current)
         };
         let Some(tree) = tree else { return };
+        // The item itself (list view) or its ancestor that is a direct child
+        // of the current directory (folder view).
         let chain = tree.ancestry(tile.node);
-        let Some(pos) = chain.iter().position(|&n| n == current) else { return };
-        if let Some(&child) = chain.get(pos + 1)
-            && let Some(row) = self.entry_model.row_of(child)
+        let child = chain.iter().position(|&n| n == current).and_then(|pos| chain.get(pos + 1).copied());
+        if let Some(row) = self.entry_model.row_of(tile.node).or_else(|| child.and_then(|c| self.entry_model.row_of(c)))
         {
             self.entry_select(row as i32);
         }

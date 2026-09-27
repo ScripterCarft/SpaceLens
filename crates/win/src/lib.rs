@@ -10,6 +10,7 @@ pub mod device;
 pub mod elevation;
 pub mod mft;
 pub mod path;
+pub mod recycle;
 pub mod shell;
 pub mod volumes;
 pub mod walker;

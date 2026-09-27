@@ -145,7 +145,7 @@ fn main() -> ExitCode {
             print_row(t, id, root.size);
         }
         println!("\nGrößte Dateien:");
-        for id in largest_files(t, args.top) {
+        for id in spacelens_core::query::largest_files(t, Tree::ROOT, args.top) {
             print_row(t, id, root.size);
         }
     }
@@ -161,24 +161,4 @@ fn print_row(t: &Tree, id: NodeId, total: u64) {
         t.path(id),
         if n.is_dir() { "\\" } else { "" }
     );
-}
-
-/// Top-`k` files by size using a bounded min-heap: O(n log k), no full sort.
-fn largest_files(t: &Tree, k: usize) -> Vec<NodeId> {
-    use std::cmp::Reverse;
-    use std::collections::BinaryHeap;
-    let mut heap = BinaryHeap::with_capacity(k + 1);
-    for id in 0..t.len() as NodeId {
-        let n = t.node(id);
-        if n.is_dir() {
-            continue;
-        }
-        heap.push(Reverse((n.size, id)));
-        if heap.len() > k {
-            heap.pop();
-        }
-    }
-    let mut out: Vec<_> = heap.into_iter().map(|Reverse(x)| x).collect();
-    out.sort_unstable_by(|a, b| b.cmp(a));
-    out.into_iter().map(|(_, id)| id).collect()
 }

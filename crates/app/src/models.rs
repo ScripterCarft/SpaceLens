@@ -47,6 +47,36 @@ impl TreeModel {
         self.expand(0);
     }
 
+    /// Hands out the tree so the caller can mutate it (see [`Self::put_tree`]).
+    pub fn take_tree(&self) -> Option<Arc<Tree>> {
+        self.tree.borrow_mut().take()
+    }
+
+    /// Re-attaches a (modified) tree. Rows of removed directories and their
+    /// expanded descendants disappear; the expansion state of the rest is kept.
+    pub fn put_tree(&self, tree: Arc<Tree>) {
+        let mut rows = self.rows.borrow_mut();
+        let mut kept = Vec::with_capacity(rows.len());
+        let mut skip_below: Option<u16> = None;
+        for r in rows.drain(..) {
+            if let Some(depth) = skip_below {
+                if r.depth > depth {
+                    continue;
+                }
+                skip_below = None;
+            }
+            if tree.node(r.id).has(flags::DELETED) {
+                skip_below = Some(r.depth);
+                continue;
+            }
+            kept.push(r);
+        }
+        *rows = kept;
+        drop(rows);
+        *self.tree.borrow_mut() = Some(tree);
+        self.notify.reset();
+    }
+
     pub fn id_at(&self, row: usize) -> Option<NodeId> {
         self.rows.borrow().get(row).map(|r| r.id)
     }
@@ -195,7 +225,10 @@ pub fn sort_for_column(column: i32, descending: bool) -> Sort {
 #[derive(Default)]
 pub struct EntryModel {
     tree: RefCell<Option<Arc<Tree>>>,
+    /// Directory shown, or the reference for the share column in list mode.
     dir: Cell<NodeId>,
+    /// Flat list (e.g. largest files) showing full paths instead of names.
+    list_mode: Cell<bool>,
     rows: RefCell<Vec<NodeId>>,
     notify: ModelNotify,
 }
@@ -210,7 +243,31 @@ impl EntryModel {
     pub fn show(&self, dir: NodeId, sort: Sort) {
         let Some(tree) = self.tree.borrow().clone() else { return };
         self.dir.set(dir);
+        self.list_mode.set(false);
         *self.rows.borrow_mut() = query::sorted_children(&tree, dir, sort, false);
+        self.notify.reset();
+    }
+
+    /// Shows an arbitrary list of nodes with full paths; shares are relative to `base`.
+    pub fn show_list(&self, ids: Vec<NodeId>, base: NodeId, sort: Sort) {
+        let Some(tree) = self.tree.borrow().clone() else { return };
+        self.dir.set(base);
+        self.list_mode.set(true);
+        let mut ids = ids;
+        query::sort_ids(&tree, &mut ids, sort);
+        *self.rows.borrow_mut() = ids;
+        self.notify.reset();
+    }
+
+    /// Hands out the tree so the caller can mutate it (see [`Self::put_tree`]).
+    pub fn take_tree(&self) -> Option<Arc<Tree>> {
+        self.tree.borrow_mut().take()
+    }
+
+    /// Re-attaches a (modified) tree, dropping rows that were removed.
+    pub fn put_tree(&self, tree: Arc<Tree>) {
+        self.rows.borrow_mut().retain(|&id| !tree.node(id).has(flags::DELETED));
+        *self.tree.borrow_mut() = Some(tree);
         self.notify.reset();
     }
 
@@ -250,7 +307,11 @@ impl Model for EntryModel {
         let is_dir = n.is_dir();
         Some(EntryRow {
             id: id as i32,
-            name: SharedString::from(&*tree.name(id)),
+            name: if self.list_mode.get() {
+                relative_path(tree, self.dir.get(), id).into()
+            } else {
+                SharedString::from(&*tree.name(id))
+            },
             is_dir,
             size: format::bytes(n.size).into(),
             alloc: format::bytes(n.alloc).into(),
@@ -271,4 +332,18 @@ impl Model for EntryModel {
     fn as_any(&self) -> &dyn Any {
         self
     }
+}
+
+/// Path of `id` relative to its ancestor `base`, e.g. `Spiele\Alt\game.pak`.
+fn relative_path(tree: &Tree, base: NodeId, id: NodeId) -> String {
+    let chain = tree.ancestry(id);
+    let start = chain.iter().position(|&n| n == base).map_or(0, |p| p + 1);
+    let mut out = String::new();
+    for &n in &chain[start..] {
+        if !out.is_empty() {
+            out.push('\\');
+        }
+        out.push_str(&tree.name(n));
+    }
+    out
 }

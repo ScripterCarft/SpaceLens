@@ -13,7 +13,7 @@ use std::borrow::Cow;
 ///
 /// Names are addressed by `(offset, len)` pairs stored in the nodes, which is
 /// far cheaper than one heap allocation per name.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct NamePool {
     bytes: Vec<u8>,
 }

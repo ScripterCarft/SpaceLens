@@ -15,10 +15,11 @@ pub mod filetype;
 pub mod format;
 pub mod names;
 pub mod query;
+pub mod safety;
 pub mod scan;
 pub mod tree;
 pub mod treemap;
 
 pub use builder::{RawEntry, TreeBuilder};
 pub use scan::{ScanError, ScanOptions, ScanOutcome, ScanProgress, ScanSnapshot, Scanner};
-pub use tree::{DirInfo, Node, NodeId, ScanIssue, Tree, flags};
+pub use tree::{DirInfo, Node, NodeId, Removed, ScanIssue, Tree, flags};

@@ -38,6 +38,8 @@ export component MainWindow inherits Window {
     in property <string> location;
     in property <string> location-info;
     in property <bool> can-go-up;
+    in property <bool> view-largest;
+    in property <bool> deleting;
 
     // --- treemap ---
     in-out property <bool> treemap-visible: true;
@@ -70,6 +72,10 @@ export component MainWindow inherits Window {
     callback entry-select(row: int);
     callback entry-open(row: int);
     callback entry-reveal(row: int);
+    callback entry-delete(row: int);
+    callback delete-selected();
+    callback show-folder-view();
+    callback show-largest();
     callback entry-navigate(key: NavKey);
     callback sort-by(column: int);
     callback treemap-resized(width: length, height: length);
@@ -119,6 +125,17 @@ export component MainWindow inherits Window {
         Menu {
             title: "Navigation";
             MenuItem {
+                title: "Ordnerinhalt";
+                enabled: root.has-tree;
+                activated => { root.show-folder-view(); }
+            }
+            MenuItem {
+                title: "Größte Dateien";
+                enabled: root.has-tree;
+                activated => { root.show-largest(); }
+            }
+            MenuSeparator { }
+            MenuItem {
                 title: "Übergeordneter Ordner";
                 enabled: root.can-go-up;
                 activated => { root.go-up(); }
@@ -127,6 +144,14 @@ export component MainWindow inherits Window {
                 title: "Im Explorer anzeigen";
                 enabled: root.has-tree;
                 activated => { root.reveal-current(); }
+            }
+        }
+        Menu {
+            title: "Bearbeiten";
+            MenuItem {
+                title: "In den Papierkorb verschieben …  (Entf)";
+                enabled: root.has-tree && root.entry-selected >= 0 && !root.deleting;
+                activated => { root.delete-selected(); }
             }
         }
         Menu {
@@ -238,6 +263,18 @@ export component MainWindow inherits Window {
                                 clicked => { root.go-up(); }
                             }
 
+                            Button {
+                                text: "Ordnerinhalt";
+                                primary: !root.view-largest;
+                                clicked => { root.show-folder-view(); }
+                            }
+
+                            Button {
+                                text: "Größte Dateien";
+                                primary: root.view-largest;
+                                clicked => { root.show-largest(); }
+                            }
+
                             VerticalLayout {
                                 horizontal-stretch: 1;
                                 alignment: center;
@@ -257,6 +294,12 @@ export component MainWindow inherits Window {
                                 text: "Im Explorer anzeigen";
                                 clicked => { root.reveal-current(); }
                             }
+
+                            Button {
+                                text: "In den Papierkorb …";
+                                enabled: root.entry-selected >= 0 && !root.deleting && !root.scanning;
+                                clicked => { root.delete-selected(); }
+                            }
                         }
                     }
 
@@ -274,6 +317,7 @@ export component MainWindow inherits Window {
                         select(row) => { root.entry-select(row); }
                         open(row) => { root.entry-open(row); }
                         reveal(row) => { root.entry-reveal(row); }
+                        delete(row) => { root.entry-delete(row); }
                         sort(column) => { root.sort-by(column); }
                         navigate(key) => { root.entry-navigate(key); }
                     }

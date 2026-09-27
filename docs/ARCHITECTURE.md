@@ -139,6 +139,23 @@ Hardlinks doppelt.
 - Renderer ist der Slint-Software-Renderer: ≈8 MB privater Speicher im Leerlauf
   gegenüber ≈80 MB mit OpenGL, und kein GPU-Treiber im Prozess.
 
+## Löschen (`core/src/safety.rs`, `win/src/recycle.rs`, `app/src/app.rs`)
+
+```
+Entf / Button / Kontextmenü
+  → safety::guard(tree, id)      Blocked → Erklärung, Ende · Warn → Hinweis im Dialog
+  → Rückfrage (MessageBox, bei Warnung „Nein“ vorausgewählt)
+  → Worker-Thread: IFileOperation (FOF_ALLOWUNDO | FOFX_RECYCLEONDELETE | FOF_WANTNUKEWARNING)
+  → danach Dateisystem prüfen: nur was wirklich weg ist, wird entfernt
+  → Tree::remove (Flag DELETED, Summen aller Vorfahren korrigiert, O(Tiefe))
+  → Modelle behalten Aufklapp-Zustand, Treemap/Legende neu, nächste Zeile ausgewählt
+```
+
+- Kein endgültiges Löschen in der App; zu große Elemente meldet Windows selbst.
+- Der Baum wird ohne Kopie bearbeitet: Modelle geben ihre `Arc<Tree>` kurz ab,
+  damit `Arc::make_mut` den Baum exklusiv besitzt.
+- Tabellen- und Baumzeilen sind für UI Automation/Screenreader beschriftet.
+
 ## Build & Auslieferung
 
 - Release-Profil: `lto = "fat"`, `codegen-units = 1`, `strip`, `panic = "unwind"`

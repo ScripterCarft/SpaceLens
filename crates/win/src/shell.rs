@@ -25,3 +25,16 @@ pub fn message_box(title: &str, text: &str, error: bool) {
     // owner window is allowed.
     unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), MB_OK | icon) };
 }
+
+/// Asks a yes/no question with a native, owner-modal message box.
+/// With `default_no`, "Nein" is pre-selected (for risky actions).
+pub fn confirm(owner: Option<isize>, title: &str, text: &str, default_no: bool) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNO, MessageBoxW};
+    let title = crate::path::wide_nul(title);
+    let text = crate::path::wide_nul(text);
+    let style = MB_YESNO | MB_ICONWARNING | if default_no { MB_DEFBUTTON2 } else { 0 };
+    let hwnd = owner.map_or(std::ptr::null_mut(), |h| h as *mut core::ffi::c_void);
+    // SAFETY: both strings are NUL-terminated and outlive the call; `hwnd` is
+    // either null or the application's own top-level window.
+    unsafe { MessageBoxW(hwnd, text.as_ptr(), title.as_ptr(), style) == IDYES }
+}

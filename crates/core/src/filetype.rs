@@ -252,7 +252,7 @@ pub fn totals(tree: &Tree, id: NodeId) -> [u64; Category::ALL.len()] {
     while let Some(n) = stack.pop() {
         let node = tree.node(n);
         if node.is_dir() {
-            stack.extend(tree.children(n));
+            stack.extend(tree.live_children(n));
         } else if node.size > 0 {
             sums[category_of(tree, n) as usize] += node.size;
         }

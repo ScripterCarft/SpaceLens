@@ -60,6 +60,16 @@ export component DirTree inherits Rectangle {
             for row[i] in root.rows: Rectangle {
                 height: Theme.row-height;
                 background: i == root.selected ? Theme.selected : area.has-hover ? Theme.hover : transparent;
+                accessible-role: list-item;
+                accessible-label: row.name;
+                accessible-description: row.size;
+                accessible-item-index: i;
+                accessible-item-selectable: true;
+                accessible-item-selected: i == root.selected;
+                accessible-expandable: row.expandable;
+                accessible-expanded: row.expanded;
+                accessible-action-default => { root.select(i); }
+                accessible-action-expand => { root.toggle(i); }
 
                 area := TouchArea {
                     clicked => {

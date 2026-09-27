@@ -91,6 +91,7 @@ export component EntryTable inherits Rectangle {
     callback select(row: int);
     callback open(row: int);
     callback reveal(row: int);
+    callback delete(row: int);
     callback sort(column: int);
     callback navigate(key: NavKey);
 
@@ -184,6 +185,7 @@ export component EntryTable inherits Rectangle {
                 if event.text == Key.PageDown { root.navigate(NavKey.page-down); return accept; }
                 if event.text == Key.Return { root.navigate(NavKey.activate); return accept; }
                 if event.text == Key.Backspace { root.navigate(NavKey.back); return accept; }
+                if event.text == Key.Delete { root.navigate(NavKey.delete); return accept; }
                 reject
             }
 
@@ -191,6 +193,16 @@ export component EntryTable inherits Rectangle {
                 for row[i] in root.rows: Rectangle {
                     height: Theme.row-height;
                     background: i == root.selected ? Theme.selected : area.has-hover ? Theme.hover : transparent;
+                    accessible-role: list-item;
+                    accessible-label: row.name;
+                    accessible-description: row.size;
+                    accessible-item-index: i;
+                    accessible-item-selectable: true;
+                    accessible-item-selected: i == root.selected;
+                    accessible-action-default => {
+                        fs.focus();
+                        root.select(i);
+                    }
 
                     area := TouchArea {
                         clicked => {
@@ -212,6 +224,11 @@ export component EntryTable inherits Rectangle {
                             MenuItem {
                                 title: "Im Explorer anzeigen";
                                 activated => { root.reveal(i); }
+                            }
+                            MenuSeparator { }
+                            MenuItem {
+                                title: "In den Papierkorb verschieben …";
+                                activated => { root.delete(i); }
                             }
                         }
                     }

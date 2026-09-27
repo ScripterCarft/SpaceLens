@@ -31,7 +31,7 @@ impl Sort {
 /// Returns the children of `id` sorted by `sort`. With `dirs_only`, files are
 /// skipped (used by the navigation tree).
 pub fn sorted_children(tree: &Tree, id: NodeId, sort: Sort, dirs_only: bool) -> Vec<NodeId> {
-    let mut ids: Vec<NodeId> = tree.children(id).filter(|&c| !dirs_only || tree.node(c).is_dir()).collect();
+    let mut ids: Vec<NodeId> = tree.live_children(id).filter(|&c| !dirs_only || tree.node(c).is_dir()).collect();
     sort_ids(tree, &mut ids, sort);
     ids
 }
@@ -92,6 +92,32 @@ fn cmp_names(a: &str, b: &str) -> Ordering {
     }
 }
 
+/// The `k` largest files below `root` (largest first). Uses a bounded
+/// min-heap: O(n log k) time and O(k) memory instead of sorting everything.
+pub fn largest_files(tree: &Tree, root: NodeId, k: usize) -> Vec<NodeId> {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+    if k == 0 {
+        return Vec::new();
+    }
+    let mut heap = BinaryHeap::with_capacity(k + 1);
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        let node = tree.node(n);
+        if node.is_dir() {
+            stack.extend(tree.live_children(n));
+        } else if node.size > 0 {
+            heap.push(Reverse((node.size, n)));
+            if heap.len() > k {
+                heap.pop();
+            }
+        }
+    }
+    let mut out: Vec<(u64, NodeId)> = heap.into_iter().map(|Reverse(x)| x).collect();
+    out.sort_unstable_by(|a, b| b.cmp(a));
+    out.into_iter().map(|(_, id)| id).collect()
+}
+
 /// Share of `part` in `whole` in the range `0.0..=1.0`.
 #[inline]
 pub fn fraction(part: u64, whole: u64) -> f32 {
@@ -143,6 +169,15 @@ mod tests {
         let t = tree();
         let ids = sorted_children(&t, 0, Sort::SIZE_DESC, true);
         assert_eq!(names(&t, &ids), "Bc");
+    }
+
+    #[test]
+    fn largest_files_are_ranked_and_skip_dirs() {
+        let t = tree();
+        let ids = largest_files(&t, 0, 2);
+        assert_eq!(names(&t, &ids).to_lowercase(), "aa", "the two 7-byte files; B and c are directories");
+        assert_eq!(names(&t, &largest_files(&t, 0, 10)).to_lowercase(), "aab", "all files, largest first");
+        assert!(largest_files(&t, 0, 0).is_empty());
     }
 
     #[test]

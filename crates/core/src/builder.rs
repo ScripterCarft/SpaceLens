@@ -274,6 +274,27 @@ mod tests {
     }
 
     #[test]
+    fn remove_updates_ancestors_and_hides_subtree() {
+        let mut t = sample();
+        let joe = 6;
+        assert_eq!(t.name(joe), "Joe");
+        let r = t.remove(joe).unwrap();
+        assert_eq!(r, crate::Removed { size: 5, alloc: 4096, files: 1, dirs: 1 });
+        assert_eq!(t.node(0).size, 1030);
+        assert_eq!(t.node(3).size, 0);
+        assert_eq!(t.counts(0), (3, 2));
+        assert_eq!(t.counts(3), (0, 0));
+        assert_eq!(t.live_children(3).count(), 0);
+        assert_eq!(t.remove(joe), None, "already removed");
+        assert_eq!(t.remove(7), None, "inside a removed subtree");
+        assert_eq!(t.remove(0), None, "root");
+        // Removing a single file.
+        let r = t.remove(4).unwrap();
+        assert_eq!((r.size, r.files, r.dirs), (10, 1, 0));
+        assert_eq!((t.node(1).size, t.node(0).size), (20, 1020));
+    }
+
+    #[test]
     fn records_issues() {
         let t = sample();
         assert_eq!(t.issues(), &[ScanIssue { node: 3, code: 5 }]);

@@ -80,7 +80,7 @@ impl Treemap {
 
     fn place_children(&mut self, tree: &Tree, dir: NodeId, rect: Rect, depth: u16) {
         let mut items: Vec<(f64, NodeId)> = tree
-            .children(dir)
+            .live_children(dir)
             .filter_map(|c| {
                 let s = tree.node(c).size;
                 (s > 0).then_some((s as f64, c))

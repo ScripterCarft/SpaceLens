@@ -11,6 +11,8 @@ spacelens-core.workspace = true
 crossbeam-channel.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+# COM (IFileOperation for the recycle bin); already in the dependency tree via Slint.
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell"] }
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security",

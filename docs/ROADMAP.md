@@ -17,13 +17,15 @@
 ## 0.3 – Analyse
 - ✅ Treemap (Squarified, in Rust gerendert, Hover/Klick/Doppelklick, Legende)
 - ✅ Dateityp-Kategorien mit Summen pro Ordner
-- Größte Dateien global, Filter/Suche, Ansicht „nach Endung“
+- ✅ Größte Dateien (aktueller Ordner, Top 1000)
+- Filter/Suche, Ansicht „nach Endung“
 - Fehlerliste (Ordner ohne Zugriff) als eigene Ansicht
 - Export (CSV)
 
 ## 0.4 – Live & Aufräumen
 - USN-Journal für inkrementelle Aktualisierung ohne Neuscan
-- Löschen über Papierkorb (IFileOperation) mit Bestätigung, Baum-Update ohne Rescan
+- ✅ Löschen über Papierkorb (IFileOperation) mit Bestätigung und Schutzregeln, Baum-Update ohne Rescan
+- Mehrfachauswahl (Strg/Umschalt) zum Löschen mehrerer Einträge
 - Bekannte Aufräumziele (Temp, Caches, Windows Update, Shader-Caches) mit Erklärung
 - Optional: getrennter Admin-Helfer-Prozess, UI ohne Adminrechte
 
