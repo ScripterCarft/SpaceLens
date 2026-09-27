@@ -18,6 +18,8 @@ export struct EntryRow {
     link: bool,
     dim: bool,
     selected: bool,
+    /// Odd duplicate group: subtle background so groups stand apart.
+    group-tint: bool,
 }
 
 // Column ids shared with Rust (see `SortColumn` in models.rs).
@@ -198,7 +200,7 @@ export component EntryTable inherits Rectangle {
             list := ListView {
                 for row[i] in root.rows: Rectangle {
                     height: Theme.row-height;
-                    background: row.selected ? Theme.selected : area.has-hover ? Theme.hover : transparent;
+                    background: row.selected ? Theme.selected : area.has-hover ? Theme.hover : row.group-tint ? Theme.group-tint : transparent;
                     accessible-role: list-item;
                     accessible-label: row.name;
                     accessible-description: row.size;

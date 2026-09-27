@@ -78,6 +78,12 @@ export component MainWindow inherits Window {
     in-out property <int> filter-size: 0;
     in-out property <int> filter-age: 0;
 
+    // --- duplicates ---
+    in-out property <int> dupes-min: 1;
+    in property <bool> dupes-running;
+    in property <bool> dupes-has-results;
+    in property <string> dupes-summary;
+
     // --- cleanup ---
     in property <[CleanupRow]> cleanup-rows;
     in property <string> bin-text;
@@ -122,6 +128,10 @@ export component MainWindow inherits Window {
     callback show-folder-view();
     callback show-largest();
     callback show-cleanup();
+    callback show-duplicates();
+    callback dupes-start();
+    callback dupes-cancel();
+    callback dupes-select-copies();
     callback search-changed(text: string);
     callback filters-changed();
     callback end-search();
@@ -216,6 +226,11 @@ export component MainWindow inherits Window {
                 shortcut: @keys(Control + F);
                 enabled: root.has-tree;
                 activated => { root.start-search(); }
+            }
+            MenuItem {
+                title: "Duplikate";
+                enabled: root.has-tree;
+                activated => { root.show-duplicates(); }
             }
             MenuItem {
                 title: "Aufräumen";
@@ -357,6 +372,12 @@ export component MainWindow inherits Window {
                                 clicked => { root.start-search(); }
                             }
                             TabButton {
+                                text: "Duplikate";
+                                active: root.tab == Tabs.duplicates;
+                                enabled: root.has-tree;
+                                clicked => { root.show-duplicates(); }
+                            }
+                            TabButton {
                                 text: "Aufräumen";
                                 active: root.tab == Tabs.cleanup;
                                 enabled: root.has-tree;
@@ -486,6 +507,55 @@ export component MainWindow inherits Window {
                             Button {
                                 text: "Suche beenden";
                                 clicked => { root.end-search(); }
+                            }
+                        }
+                    }
+
+                    // Duplicate finder controls, only on the duplicates tab.
+                    if root.tab == Tabs.duplicates: Rectangle {
+                        background: Palette.alternate-background;
+                        HorizontalLayout {
+                            padding: 6px;
+                            padding-left: 8px;
+                            spacing: 8px;
+                            ComboBox {
+                                width: 140px;
+                                model: ["ab 100 KB", "ab 1 MB", "ab 10 MB", "ab 100 MB"];
+                                current-index <=> root.dupes-min;
+                                enabled: !root.dupes-running;
+                            }
+                            Button {
+                                text: root.dupes-running ? "Abbrechen" : "Duplikate suchen";
+                                primary: !root.dupes-running && !root.dupes-has-results;
+                                enabled: !root.deleting && !root.scanning;
+                                clicked => {
+                                    if root.dupes-running {
+                                        root.dupes-cancel();
+                                    } else {
+                                        root.dupes-start();
+                                    }
+                                }
+                            }
+                            if root.dupes-running: VerticalLayout {
+                                alignment: center;
+                                ProgressIndicator {
+                                    width: 80px;
+                                    height: 4px;
+                                    indeterminate: true;
+                                }
+                            }
+                            Text {
+                                text: root.dupes-summary;
+                                color: Theme.muted;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                min-width: 0px;
+                                overflow: elide;
+                            }
+                            Button {
+                                text: "Kopien auswählen";
+                                enabled: root.dupes-has-results && !root.dupes-running;
+                                clicked => { root.dupes-select-copies(); }
                             }
                         }
                     }

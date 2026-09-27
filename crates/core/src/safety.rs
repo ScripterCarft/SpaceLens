@@ -89,6 +89,12 @@ pub fn guard(tree: &Tree, id: NodeId) -> Option<Guard> {
     if tree.get(id)?.has(flags::DELETED) {
         return Some(Guard::Blocked("Wurde bereits entfernt."));
     }
+    with_components(tree, id, guard_for_components)
+}
+
+/// Calls `f` with the lower-cased path components after the drive
+/// (`C:\Users\Joe` → `["users", "joe"]`).
+fn with_components<R>(tree: &Tree, id: NodeId, f: impl FnOnce(&[&str]) -> R) -> R {
     let path = tree.path(id).to_lowercase();
     let without_prefix = path.strip_prefix(r"\\?\").unwrap_or(&path);
     let mut parts = without_prefix.split('\\').filter(|p| !p.is_empty());
@@ -100,7 +106,33 @@ pub fn guard(tree: &Tree, id: NodeId) -> Option<Guard> {
         parts.next();
     }
     let comps: Vec<&str> = parts.collect();
-    guard_for_components(&comps)
+    f(&comps)
+}
+
+/// Areas owned by Windows or installed programs, including per-user program
+/// data: `AppData` and the dot-folders tools keep in the profile (`.nuget`,
+/// `.gradle`, `.localin`, …). Duplicates there are intentional (e.g. identical DLLs of
+/// different apps) and removing them breaks software, so the duplicate
+/// finder never looks inside.
+pub fn is_system_area_components(comps: &[&str]) -> bool {
+    const AREAS: &[&str] = &[
+        "windows",
+        "program files",
+        "program files (x86)",
+        "programdata",
+        "system volume information",
+        "recovery",
+        "boot",
+        "config.msi",
+        "windows.old",
+    ];
+    let Some(first) = comps.first() else { return false };
+    let profile_data = *first == "users" && comps.get(2).is_some_and(|c| *c == "appdata" || c.starts_with('.'));
+    first.starts_with('$') || AREAS.contains(first) || profile_data
+}
+
+pub fn is_system_area(tree: &Tree, id: NodeId) -> bool {
+    with_components(tree, id, is_system_area_components)
 }
 
 #[cfg(test)]
@@ -177,5 +209,25 @@ mod tests {
         assert!(matches!(guard(&t, 0), Some(Guard::Blocked(_))));
         assert!(matches!(guard(&t, 1), Some(Guard::Blocked(_))));
         assert_eq!(guard(&t, 2), None);
+    }
+}
+
+#[cfg(test)]
+mod area_tests {
+    use super::is_system_area_components as area;
+
+    #[test]
+    fn system_areas() {
+        assert!(area(&["windows", "system32"]));
+        assert!(area(&["program files", "app"]));
+        assert!(area(&["$recycle.bin"]));
+        assert!(area(&["users", "joe", "appdata", "local"]));
+        assert!(area(&["users", "joe", ".nuget", "packages"]));
+        assert!(area(&["users", "joe", ".local", "bin"]));
+        assert!(!area(&["users", "joe", "documents", ".hidden"]));
+        assert!(!area(&["users", "joe", "videos"]));
+        assert!(!area(&["users", "joe"]));
+        assert!(!area(&["games"]));
+        assert!(!area(&[]));
     }
 }

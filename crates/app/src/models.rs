@@ -7,7 +7,7 @@
 
 use std::any::Any;
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use slint::{Model, ModelNotify, ModelTracker, SharedString};
@@ -235,6 +235,8 @@ pub struct EntryModel {
     selection: RefCell<HashSet<NodeId>>,
     /// Row where a Shift range starts (last plain or Ctrl click).
     anchor: Cell<Option<usize>>,
+    /// Duplicate-group index per node (duplicates view only).
+    groups: RefCell<HashMap<NodeId, u32>>,
     notify: ModelNotify,
 }
 
@@ -243,6 +245,7 @@ impl EntryModel {
         *self.tree.borrow_mut() = tree;
         self.rows.borrow_mut().clear();
         self.selection.borrow_mut().clear();
+        self.groups.borrow_mut().clear();
         self.anchor.set(None);
         self.notify.reset();
     }
@@ -251,6 +254,7 @@ impl EntryModel {
         let Some(tree) = self.tree.borrow().clone() else { return };
         self.dir.set(dir);
         self.list_mode.set(false);
+        self.groups.borrow_mut().clear();
         self.selection.borrow_mut().clear();
         self.anchor.set(None);
         *self.rows.borrow_mut() = query::sorted_children(&tree, dir, sort, false);
@@ -262,11 +266,38 @@ impl EntryModel {
         let Some(tree) = self.tree.borrow().clone() else { return };
         self.dir.set(base);
         self.list_mode.set(true);
+        self.groups.borrow_mut().clear();
         self.selection.borrow_mut().clear();
         self.anchor.set(None);
         let mut ids = ids;
         query::sort_ids(&tree, &mut ids, sort);
         *self.rows.borrow_mut() = ids;
+        self.notify.reset();
+    }
+
+    /// Shows duplicate groups in the given order (no sorting: groups stay
+    /// together); shares are relative to `base`.
+    pub fn show_groups(&self, groups: &[Vec<NodeId>], base: NodeId) {
+        self.dir.set(base);
+        self.list_mode.set(true);
+        self.selection.borrow_mut().clear();
+        self.anchor.set(None);
+        let mut map = HashMap::new();
+        let mut rows = Vec::new();
+        for (g, ids) in groups.iter().enumerate() {
+            for &id in ids {
+                map.insert(id, g as u32);
+                rows.push(id);
+            }
+        }
+        *self.groups.borrow_mut() = map;
+        *self.rows.borrow_mut() = rows;
+        self.notify.reset();
+    }
+
+    /// Replaces the selection with `ids`.
+    pub fn select_ids(&self, ids: &[NodeId]) {
+        *self.selection.borrow_mut() = ids.iter().copied().collect();
         self.notify.reset();
     }
 
@@ -382,6 +413,7 @@ impl Model for EntryModel {
             link: n.has(flags::NOT_FOLLOWED),
             dim: n.has(flags::HIDDEN) || n.has(flags::SYSTEM),
             selected: self.selection.borrow().contains(&id),
+            group_tint: self.groups.borrow().get(&id).is_some_and(|g| g % 2 == 1),
         })
     }
 

@@ -15,6 +15,7 @@ spacelens-win = { path = "crates/win" }
 crossbeam-channel = "0.5"
 windows-sys = "0.61"
 windows = "0.62"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 slint = { version = "1.18", default-features = false }
 slint-build = "1.18"
 embed-resource = "3"

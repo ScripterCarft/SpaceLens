@@ -17,6 +17,7 @@ use slint::{
     Color, ComponentHandle, Image, ModelRc, Rgb8Pixel, SharedPixelBuffer, SharedString, Timer, TimerMode, VecModel,
 };
 use spacelens_core::cleanup::{self, Finding, Level};
+use spacelens_core::duplicates::{self, DupGroup};
 use spacelens_core::filetype::{self, Category};
 use spacelens_core::safety::{self, Guard};
 use spacelens_core::search::{self, Filter, Kind};
@@ -68,6 +69,8 @@ enum View {
     Locations(&'static str),
     /// Search results below the current directory.
     Search,
+    /// Duplicate groups below the current directory.
+    Duplicates,
 }
 
 impl View {
@@ -77,6 +80,7 @@ impl View {
             View::Folder => 0,
             View::Largest => 1,
             View::Search => 2,
+            View::Duplicates => 3,
             View::Cleanup | View::Locations(_) => 4,
         }
     }
@@ -94,7 +98,24 @@ struct DeleteJob {
     generation: u64,
 }
 
+/// Duplicate search running on a worker thread (holds a clone of the tree).
+struct DupJob {
+    progress: Arc<ScanProgress>,
+    handle: JoinHandle<Option<Vec<DupGroup>>>,
+    root: NodeId,
+    generation: u64,
+    started: Instant,
+}
+
+/// Last duplicate result and the folder it belongs to.
+#[derive(Default)]
+struct DupResult {
+    root: Option<NodeId>,
+    groups: Vec<DupGroup>,
+}
+
 struct State {
+    dup_job: Option<DupJob>,
     tree: Option<Arc<Tree>>,
     /// Incremented whenever a different tree is shown, so results of work that
     /// started on an older tree (node ids!) are never applied to a newer one.
@@ -118,6 +139,8 @@ pub struct App {
     treemap_timer: Timer,
     delete_timer: Timer,
     search_timer: Timer,
+    dup_timer: Timer,
+    dups: RefCell<DupResult>,
     /// Matches and total size of the last search (for the header).
     search_summary: std::cell::Cell<(u64, u64)>,
     /// Result of the last cleanup evaluation (indices match the view rows).
@@ -150,6 +173,8 @@ impl App {
             treemap_timer: Timer::default(),
             delete_timer: Timer::default(),
             search_timer: Timer::default(),
+            dup_timer: Timer::default(),
+            dups: RefCell::new(DupResult::default()),
             search_summary: std::cell::Cell::new((0, 0)),
             findings: RefCell::new(Vec::new()),
             elevated,
@@ -158,6 +183,7 @@ impl App {
                 generation: 0,
                 job: None,
                 delete_job: None,
+                dup_job: None,
                 view: View::Folder,
                 volumes: Vec::new(),
                 current: Tree::ROOT,
@@ -201,6 +227,10 @@ impl App {
         bind!(&app, ui, on_search_changed => search_changed(text));
         bind!(&app, ui, on_filters_changed => filters_changed());
         bind!(&app, ui, on_end_search => end_search());
+        bind!(&app, ui, on_show_duplicates => show_duplicates());
+        bind!(&app, ui, on_dupes_start => dupes_start());
+        bind!(&app, ui, on_dupes_cancel => dupes_cancel());
+        bind!(&app, ui, on_dupes_select_copies => dupes_select_copies());
         bind!(&app, ui, on_entry_navigate => entry_navigate(key, shift));
         bind!(&app, ui, on_sort_by => sort_by(column));
         bind!(&app, ui, on_show_about => show_about());
@@ -265,6 +295,10 @@ impl App {
         }
         if self.state.borrow().delete_job.is_some() {
             self.set_status("Bitte warten, bis das Verschieben in den Papierkorb abgeschlossen ist.");
+            return;
+        }
+        if self.state.borrow().dup_job.is_some() {
+            self.set_status("Bitte zuerst die Duplikat-Suche abbrechen oder abwarten.");
             return;
         }
 
@@ -392,6 +426,7 @@ impl App {
             st.tree = tree.clone();
             st.generation += 1;
         }
+        *self.dups.borrow_mut() = DupResult::default();
         self.findings.borrow_mut().clear();
         self.entry_model.set_tree(tree.clone());
         self.tree_model.set_tree(tree);
@@ -417,6 +452,10 @@ impl App {
     fn elevate(&self) {
         if self.state.borrow().delete_job.is_some() {
             self.set_status("Bitte warten, bis das Verschieben in den Papierkorb abgeschlossen ist.");
+            return;
+        }
+        if self.state.borrow().dup_job.is_some() {
+            self.set_status("Bitte zuerst die Duplikat-Suche abbrechen oder abwarten.");
             return;
         }
         let path = self.ui().map(|ui| ui.get_scan_path().trim().to_string()).unwrap_or_default();
@@ -496,6 +535,19 @@ impl App {
                 ui.set_search_summary(summary.clone().into());
                 ("Suche in".to_string(), true, summary)
             }
+            View::Duplicates => {
+                let dups = self.dups.borrow();
+                let info = if dups.root == Some(dir) && !dups.groups.is_empty() {
+                    format!(
+                        "{} doppelt in {} Gruppen",
+                        format::bytes(dups.groups.iter().map(DupGroup::wasted).sum()),
+                        format::count(dups.groups.len() as u64)
+                    )
+                } else {
+                    String::new()
+                };
+                ("Duplikate in".to_string(), true, info)
+            }
             View::Largest => (
                 "Größte Dateien in".to_string(),
                 true,
@@ -563,7 +615,7 @@ impl App {
         match self.state.borrow().view {
             View::Folder => {}
             View::Locations(_) => return self.show_cleanup(),
-            View::Largest | View::Cleanup | View::Search => return self.show_folder_view(),
+            View::Largest | View::Cleanup | View::Search | View::Duplicates => return self.show_folder_view(),
         }
         let (tree, current) = {
             let st = self.state.borrow();
@@ -712,7 +764,7 @@ impl App {
         let n = tree.node(id);
         if n.is_dir() && !n.has(flags::NOT_FOLLOWED) {
             self.navigate_to(id, None);
-        } else if matches!(self.state.borrow().view, View::Largest | View::Search) {
+        } else if matches!(self.state.borrow().view, View::Largest | View::Search | View::Duplicates) {
             // From the list, jump to the file in its folder.
             if let Some(parent) = tree.parent(id) {
                 self.navigate_to(parent, Some(id));
@@ -765,6 +817,9 @@ impl App {
     }
 
     fn sort_by(&self, column: i32) {
+        if self.state.borrow().view == View::Duplicates {
+            return self.set_status("In der Duplikat-Ansicht bleiben die Gruppen zusammen – Sortieren ist hier aus.");
+        }
         let Some(ui) = self.ui() else { return };
         let selected = self.entry_model.id_at(ui.get_entry_selected().max(0) as usize);
         let (column, descending) = {
@@ -817,7 +872,7 @@ impl App {
     fn delete_row(self: &Rc<Self>, row: i32) {
         {
             let st = self.state.borrow();
-            if st.job.is_some() || st.delete_job.is_some() {
+            if st.job.is_some() || st.delete_job.is_some() || st.dup_job.is_some() {
                 drop(st);
                 self.set_status("Bitte warten, bis der laufende Vorgang abgeschlossen ist.");
                 return;
@@ -1017,6 +1072,12 @@ impl App {
         if self.state.borrow().view == View::Search {
             self.run_search(); // keeps match count and total size correct
         }
+        if self.dups.borrow().root.is_some() {
+            self.prune_dup_result(&tree);
+            if self.state.borrow().view == View::Duplicates {
+                self.show_dup_result();
+            }
+        }
         self.update_location(&tree);
         self.render_treemap();
         total
@@ -1108,6 +1169,185 @@ impl App {
         }
         self.update_location(&tree);
         self.set_status(format!("Suche: {} Treffer in {} ms", format::count(result.matches), elapsed.as_millis()));
+    }
+
+    // ------------------------------------------------------- duplicates
+
+    fn show_duplicates(&self) {
+        if self.state.borrow().tree.is_none() {
+            return;
+        }
+        self.state.borrow_mut().view = View::Duplicates;
+        self.sync_view_flags();
+        self.show_dup_result();
+    }
+
+    /// Shows the stored result if it belongs to the current folder.
+    fn show_dup_result(&self) {
+        let Some(tree) = self.state.borrow().tree.clone() else { return };
+        let current = self.state.borrow().current;
+        let dups = self.dups.borrow();
+        let groups: &[DupGroup] = if dups.root == Some(current) { &dups.groups } else { &[] };
+        let ids: Vec<Vec<NodeId>> = groups.iter().map(|g| g.ids.clone()).collect();
+        let has_results = !groups.is_empty();
+        let summary = if dups.root != Some(current) {
+            "Findet Dateien mit identischem Inhalt in diesem Ordner (System- und Programmbereiche ausgenommen)."
+                .to_string()
+        } else if groups.is_empty() {
+            "Keine Duplikate gefunden.".to_string()
+        } else {
+            let files: usize = groups.iter().map(|g| g.ids.len()).sum();
+            let wasted: u64 = groups.iter().map(DupGroup::wasted).sum();
+            format!(
+                "{} Gruppen  ·  {} Dateien  ·  {} doppelt belegt",
+                format::count(groups.len() as u64),
+                format::count(files as u64),
+                format::bytes(wasted)
+            )
+        };
+        drop(dups);
+        self.entry_model.show_groups(&ids, current);
+        if let Some(ui) = self.ui() {
+            ui.set_dupes_has_results(has_results);
+            ui.set_dupes_summary(summary.into());
+            ui.set_entry_selected(-1);
+        }
+        self.update_location(&tree);
+    }
+
+    fn dupes_start(self: &Rc<Self>) {
+        {
+            let st = self.state.borrow();
+            if st.job.is_some() || st.delete_job.is_some() || st.dup_job.is_some() {
+                return;
+            }
+        }
+        let Some(ui) = self.ui() else { return };
+        let (tree, root, generation) = {
+            let st = self.state.borrow();
+            (st.tree.clone(), st.current, st.generation)
+        };
+        let Some(tree) = tree else { return };
+        const MIN: [u64; 4] = [100 << 10, 1 << 20, 10 << 20, 100 << 20];
+        let min = MIN.get(ui.get_dupes_min().max(0) as usize).copied().unwrap_or(1 << 20);
+
+        // Stage 1 (same size) needs no I/O and is instant; hashing runs on a worker.
+        let candidates = duplicates::candidates(&tree, root, min);
+        let threads = match tree.root_path().chars().next().and_then(spacelens_win::device::seek_penalty) {
+            Some(true) => 1, // HDD: one sequential reader
+            _ => 4,
+        };
+        let progress = Arc::new(ScanProgress::new());
+        let spawned = std::thread::Builder::new().name("duplicates".into()).spawn({
+            let (tree, progress) = (Arc::clone(&tree), Arc::clone(&progress));
+            move || spacelens_win::dupes::find(&tree, candidates, &progress, threads)
+        });
+        let handle = match spawned {
+            Ok(h) => h,
+            Err(e) => return self.set_status(format!("Duplikat-Suche konnte nicht gestartet werden: {e}")),
+        };
+        self.state.borrow_mut().dup_job = Some(DupJob { progress, handle, root, generation, started: Instant::now() });
+        ui.set_dupes_running(true);
+        ui.set_dupes_summary("Suche läuft …".into());
+
+        let weak = Rc::downgrade(self);
+        self.dup_timer.start(TimerMode::Repeated, POLL_INTERVAL, move || {
+            if let Some(app) = weak.upgrade() {
+                app.poll_dupes();
+            }
+        });
+    }
+
+    fn dupes_cancel(&self) {
+        if let Some(job) = &self.state.borrow().dup_job {
+            job.progress.cancel();
+        }
+    }
+
+    fn poll_dupes(&self) {
+        let finished = {
+            let st = self.state.borrow();
+            let Some(job) = &st.dup_job else {
+                self.dup_timer.stop();
+                return;
+            };
+            if let Some(ui) = self.ui() {
+                let s = job.progress.snapshot();
+                ui.set_dupes_summary(
+                    format!(
+                        "{}  {} Dateien geprüft  ·  {} gelesen  ·  {}",
+                        job.progress.current(),
+                        format::count(s.files),
+                        format::bytes(s.bytes),
+                        format::seconds(job.started.elapsed().as_secs_f64())
+                    )
+                    .into(),
+                );
+            }
+            job.handle.is_finished()
+        };
+        if !finished {
+            return;
+        }
+        self.dup_timer.stop();
+        let Some(job) = self.state.borrow_mut().dup_job.take() else { return };
+        if let Some(ui) = self.ui() {
+            ui.set_dupes_running(false);
+        }
+        let result = job.handle.join();
+        if job.generation != self.state.borrow().generation {
+            return; // a new scan replaced the tree meanwhile
+        }
+        match result {
+            Ok(Some(groups)) => {
+                let elapsed = job.started.elapsed();
+                *self.dups.borrow_mut() = DupResult { root: Some(job.root), groups };
+                self.set_status(format!("Duplikat-Suche fertig in {}", format::seconds(elapsed.as_secs_f64())));
+            }
+            Ok(None) => self.set_status("Duplikat-Suche abgebrochen."),
+            Err(_) => self.set_status("Duplikat-Suche fehlgeschlagen: interner Fehler."),
+        }
+        if self.state.borrow().view == View::Duplicates {
+            self.show_dup_result();
+        }
+    }
+
+    /// Selects every copy except the oldest file of each group.
+    fn dupes_select_copies(&self) {
+        let Some(tree) = self.state.borrow().tree.clone() else { return };
+        let copies: Vec<NodeId> = {
+            let dups = self.dups.borrow();
+            dups.groups
+                .iter()
+                .flat_map(|g| {
+                    let keep = duplicates::keeper(&tree, &g.ids);
+                    g.ids.iter().copied().filter(move |&id| Some(id) != keep)
+                })
+                .collect()
+        };
+        if copies.is_empty() {
+            return;
+        }
+        self.entry_model.select_ids(&copies);
+        let size: u64 = copies.iter().map(|&id| tree.node(id).size).sum();
+        if let Some(ui) = self.ui() {
+            ui.set_entry_selected(self.entry_model.row_of(copies[0]).map_or(-1, |r| r as i32));
+            ui.invoke_focus_table();
+        }
+        self.set_status(format!(
+            "{} Kopien ausgewählt ({}) – jeweils die älteste Datei bleibt. Entf verschiebt die Kopien in den Papierkorb.",
+            format::count(copies.len() as u64),
+            format::bytes(size)
+        ));
+    }
+
+    /// Drops removed files from the stored groups (after deleting).
+    fn prune_dup_result(&self, tree: &Tree) {
+        let mut dups = self.dups.borrow_mut();
+        for g in &mut dups.groups {
+            g.ids.retain(|&id| !tree.node(id).has(flags::DELETED));
+        }
+        dups.groups.retain(|g| g.ids.len() > 1);
     }
 
     // ---------------------------------------------------------- cleanup
@@ -1226,7 +1466,10 @@ impl App {
     }
 
     fn cleanup_clean(self: &Rc<Self>, index: i32) {
-        if self.state.borrow().job.is_some() || self.state.borrow().delete_job.is_some() {
+        if self.state.borrow().job.is_some()
+            || self.state.borrow().delete_job.is_some()
+            || self.state.borrow().dup_job.is_some()
+        {
             return self.set_status("Bitte warten, bis der laufende Vorgang abgeschlossen ist.");
         }
         let Some(finding) = self.findings.borrow().get(index as usize).cloned() else { return };
@@ -1293,6 +1536,10 @@ impl App {
     fn empty_bin(&self) {
         if self.state.borrow().delete_job.is_some() {
             self.set_status("Bitte warten, bis das Verschieben in den Papierkorb abgeschlossen ist.");
+            return;
+        }
+        if self.state.borrow().dup_job.is_some() {
+            self.set_status("Bitte zuerst die Duplikat-Suche abbrechen oder abwarten.");
             return;
         }
         let before = recycle::bin_info().map_or(0, |(size, _)| size);

@@ -12,6 +12,7 @@
 
 pub mod builder;
 pub mod cleanup;
+pub mod duplicates;
 pub mod filetype;
 pub mod format;
 pub mod names;

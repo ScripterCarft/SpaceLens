@@ -7,6 +7,7 @@
 #![cfg(windows)]
 
 pub mod device;
+pub mod dupes;
 pub mod elevation;
 pub mod known;
 pub mod mft;

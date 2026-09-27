@@ -77,3 +77,39 @@ fn search_speed_on_system_drive() {
         );
     }
 }
+
+#[test]
+#[ignore]
+fn duplicates_on_system_drive() {
+    use spacelens_core::duplicates;
+    let out = spacelens_win::walker::WalkScanner
+        .scan(Path::new("C:\\"), &ScanOptions::default(), &ScanProgress::new())
+        .unwrap();
+    let tree = out.tree;
+    let t = Instant::now();
+    let cands = duplicates::candidates(&tree, Tree::ROOT, 1 << 20);
+    let n: usize = cands.iter().map(Vec::len).sum();
+    let bytes: u64 = cands.iter().flatten().map(|&i| tree.node(i).size).sum();
+    eprintln!(
+        "Kandidaten: {} Gruppen, {} Dateien, {} – {:?}",
+        cands.len(),
+        n,
+        spacelens_core::format::bytes(bytes),
+        t.elapsed()
+    );
+    let progress = ScanProgress::new();
+    let t = Instant::now();
+    let groups = spacelens_win::dupes::find(&tree, cands, &progress, 4).unwrap();
+    let wasted: u64 = groups.iter().map(|g| g.wasted()).sum();
+    let s = progress.snapshot();
+    eprintln!(
+        "Duplikate: {} Gruppen, {} doppelt – gelesen {} in {:?}",
+        groups.len(),
+        spacelens_core::format::bytes(wasted),
+        spacelens_core::format::bytes(s.bytes),
+        t.elapsed()
+    );
+    for g in groups.iter().take(5) {
+        eprintln!("  {} × {}  {}", g.ids.len(), spacelens_core::format::bytes(g.size), tree.path(g.ids[0]));
+    }
+}

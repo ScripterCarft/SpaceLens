@@ -23,6 +23,9 @@
 - Fehlerliste (Ordner ohne Zugriff) als eigene Ansicht
 - Export (CSV)
 
+## 0.3b – Duplikate ✅
+- Duplikat-Suche (Größe → Probe → XXH3-128), Kopien auswählen
+
 ## 0.4 – Live & Aufräumen
 - USN-Journal für inkrementelle Aktualisierung ohne Neuscan
 - ✅ Löschen über Papierkorb (IFileOperation) mit Bestätigung und Schutzregeln, Baum-Update ohne Rescan

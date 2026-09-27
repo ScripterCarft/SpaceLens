@@ -172,6 +172,22 @@ Entf / Button / Kontextmenü
 - Gemessen auf C: (485 000 Dateien): alle Suchen 12–26 ms; die UI sucht 120 ms
   nach der letzten Eingabe.
 
+## Duplikate (`core/src/duplicates.rs`, `win/src/dupes.rs`)
+
+1. **Gleiche Größe** (aus dem Scan, keine Festplattenzugriffe) – schließt fast alles aus.
+2. **Probe**: XXH3-128 über die ersten und letzten 16 KiB.
+3. **Vollständige Prüfsumme** (XXH3-128, 1-MiB-Blöcke) nur für die Verbleibenden.
+
+- Ausgelassen: System- und Programmbereiche inkl. `AppData` und Werkzeug-Ordner mit
+  Punkt im Profil (`.nuget`, `.local` …) – außer man sucht gezielt darin; Hardlinks,
+  Cloud-Platzhalter (würden sonst heruntergeladen), Sparse-Dateien.
+- Dateien werden nur lesend mit voller Freigabe geöffnet; 4 Leser auf SSD, 1 auf HDD.
+- „Kopien auswählen“ behält pro Gruppe die älteste Datei; gelöscht wird über den
+  normalen Papierkorb-Weg mit allen Schutzregeln.
+- Während der Suche sind Löschen/Scannen gesperrt (der Worker hält den Baum).
+- Gemessen auf C: (vor dem Ausschluss der Werkzeug-Ordner): 349 Kandidaten, 1,9 GB
+  gelesen in 1,9 s; Kandidatensuche 16 ms.
+
 ## Aufräumen (`core/src/cleanup.rs`, `win/src/known.rs`)
 
 - Katalog `RULES`: Titel, Erklärung, Einstufung (Sicher/Mit Vorsicht), Admin-Bedarf
