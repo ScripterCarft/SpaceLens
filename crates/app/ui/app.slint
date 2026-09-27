@@ -1,0 +1,333 @@
+// Main window: toolbar, folder tree | contents table, status bar.
+
+import { Button, ComboBox, LineEdit, Palette, ProgressIndicator } from "std-widgets.slint";
+import { Theme, NavKey } from "widgets.slint";
+import { DirTree, TreeRow } from "tree.slint";
+import { EntryTable, EntryRow } from "table.slint";
+
+export { TreeRow, EntryRow, NavKey }
+
+export component MainWindow inherits Window {
+    title: "SpaceLens";
+    preferred-width: 1280px;
+    preferred-height: 800px;
+    min-width: 900px;
+    min-height: 520px;
+    background: Palette.background;
+
+    // --- scan controls ---
+    in property <[string]> drives;
+    in-out property <int> drive-index: -1;
+    in-out property <string> scan-path;
+    in property <bool> scanning;
+    in property <bool> elevated;
+
+    // --- scan progress (shown while `scanning`) ---
+    in property <string> progress-counts;
+    in property <string> progress-path;
+
+    // --- results ---
+    in property <bool> has-tree;
+    in property <[TreeRow]> tree-rows;
+    in property <int> tree-selected: -1;
+    in property <[EntryRow]> entries;
+    in property <int> entry-selected: -1;
+    in property <int> sort-column: 1;
+    in property <bool> sort-descending: true;
+    in property <string> location;
+    in property <string> location-info;
+    in property <bool> can-go-up;
+
+    // --- status bar ---
+    in property <string> status;
+    in property <string> scan-info;
+
+    out property <int> tree-page-rows: tree.page-rows;
+    out property <int> table-page-rows: table.page-rows;
+
+    callback drive-selected(index: int);
+    callback start-scan();
+    callback cancel-scan();
+    callback elevate();
+    callback refresh-drives();
+    callback go-up();
+    callback reveal-current();
+    callback tree-toggle(row: int);
+    callback tree-select(row: int);
+    callback tree-navigate(key: NavKey);
+    callback entry-select(row: int);
+    callback entry-open(row: int);
+    callback entry-reveal(row: int);
+    callback entry-navigate(key: NavKey);
+    callback sort-by(column: int);
+    callback show-about();
+    callback quit();
+
+    public function focus-table() {
+        table.focus-list();
+    }
+
+    property <length> tree-width: 340px;
+
+    MenuBar {
+        Menu {
+            title: "Datei";
+            MenuItem {
+                title: "Scannen";
+                shortcut: @keys(F5);
+                activated => { root.start-scan(); }
+            }
+            MenuItem {
+                title: "Scan abbrechen";
+                enabled: root.scanning;
+                activated => { root.cancel-scan(); }
+            }
+            MenuSeparator { }
+            MenuItem {
+                title: "Laufwerksliste aktualisieren";
+                activated => { root.refresh-drives(); }
+            }
+            MenuItem {
+                title: "Als Administrator neu starten";
+                enabled: !root.elevated;
+                activated => { root.elevate(); }
+            }
+            MenuSeparator { }
+            MenuItem {
+                title: "Beenden";
+                activated => { root.quit(); }
+            }
+        }
+        Menu {
+            title: "Navigation";
+            MenuItem {
+                title: "Übergeordneter Ordner";
+                enabled: root.can-go-up;
+                activated => { root.go-up(); }
+            }
+            MenuItem {
+                title: "Im Explorer anzeigen";
+                enabled: root.has-tree;
+                activated => { root.reveal-current(); }
+            }
+        }
+        Menu {
+            title: "Hilfe";
+            MenuItem {
+                title: "Über SpaceLens";
+                activated => { root.show-about(); }
+            }
+        }
+    }
+
+    VerticalLayout {
+        // ---------------------------------------------------------- toolbar
+        Rectangle {
+            background: Palette.alternate-background;
+            HorizontalLayout {
+                padding: 8px;
+                spacing: 8px;
+
+                ComboBox {
+                    width: 360px;
+                    model: root.drives;
+                    current-index <=> root.drive-index;
+                    enabled: !root.scanning;
+                    selected => { root.drive-selected(self.current-index); }
+                }
+
+                LineEdit {
+                    horizontal-stretch: 1;
+                    text <=> root.scan-path;
+                    placeholder-text: "Pfad, z. B. C:\\ oder D:\\Daten";
+                    enabled: !root.scanning;
+                    accepted => { root.start-scan(); }
+                }
+
+                Button {
+                    width: 110px;
+                    text: root.scanning ? "Abbrechen" : "Scannen";
+                    primary: !root.scanning;
+                    clicked => {
+                        if root.scanning {
+                            root.cancel-scan();
+                        } else {
+                            root.start-scan();
+                        }
+                    }
+                }
+
+                if !root.elevated: Button {
+                    text: "Als Administrator neu starten";
+                    enabled: !root.scanning;
+                    clicked => { root.elevate(); }
+                }
+            }
+        }
+
+        Rectangle {
+            height: 1px;
+            background: Theme.divider;
+        }
+
+        // ---------------------------------------------------------- content
+        Rectangle {
+            vertical-stretch: 1;
+
+            HorizontalLayout {
+                tree := DirTree {
+                    width: root.tree-width;
+                    rows: root.tree-rows;
+                    selected: root.tree-selected;
+                    toggle(row) => { root.tree-toggle(row); }
+                    select(row) => { root.tree-select(row); }
+                    navigate(key) => { root.tree-navigate(key); }
+                }
+
+                // Draggable splitter.
+                Rectangle {
+                    width: 5px;
+                    background: splitter.has-hover || splitter.pressed ? Theme.bar-fill.with-alpha(0.4) : Theme.divider;
+                    splitter := TouchArea {
+                        mouse-cursor: col-resize;
+                        moved => {
+                            root.tree-width = clamp(root.tree-width + self.mouse-x - self.pressed-x, 200px, root.width - 480px);
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+
+                    // Location bar.
+                    Rectangle {
+                        HorizontalLayout {
+                            padding: 6px;
+                            padding-left: 8px;
+                            spacing: 8px;
+
+                            Button {
+                                text: "↑";
+                                width: 36px;
+                                enabled: root.can-go-up;
+                                clicked => { root.go-up(); }
+                            }
+
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                alignment: center;
+                                Text {
+                                    text: root.location;
+                                    font-weight: 600;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: root.location-info;
+                                    color: Theme.muted;
+                                    overflow: elide;
+                                }
+                            }
+
+                            Button {
+                                text: "Im Explorer anzeigen";
+                                clicked => { root.reveal-current(); }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        height: 1px;
+                        background: Theme.divider;
+                    }
+
+                    table := EntryTable {
+                        vertical-stretch: 1;
+                        rows: root.entries;
+                        selected: root.entry-selected;
+                        sort-column: root.sort-column;
+                        sort-descending: root.sort-descending;
+                        select(row) => { root.entry-select(row); }
+                        open(row) => { root.entry-open(row); }
+                        reveal(row) => { root.entry-reveal(row); }
+                        sort(column) => { root.sort-by(column); }
+                        navigate(key) => { root.entry-navigate(key); }
+                    }
+                }
+            }
+
+            // Placeholder / progress overlay; covers (and blocks) the content.
+            if !root.has-tree: Rectangle {
+                background: Palette.background;
+                TouchArea { }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 10px;
+                    padding: 24px;
+
+                    Text {
+                        text: root.scanning ? "Scanne …" : "Laufwerk oder Ordner wählen und „Scannen“ klicken";
+                        font-size: 18px;
+                        horizontal-alignment: center;
+                    }
+                    if root.scanning: Text {
+                        text: root.progress-counts;
+                        color: Theme.muted;
+                        horizontal-alignment: center;
+                    }
+                    if root.scanning: Text {
+                        text: root.progress-path;
+                        color: Theme.muted;
+                        overflow: elide;
+                        horizontal-alignment: center;
+                    }
+                    if !root.scanning && !root.elevated: Text {
+                        text: "Hinweis: Ohne Administratorrechte fehlen geschützte Ordner (z. B. andere Benutzerprofile).";
+                        color: Theme.muted;
+                        horizontal-alignment: center;
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            height: 1px;
+            background: Theme.divider;
+        }
+
+        // ------------------------------------------------------- status bar
+        Rectangle {
+            height: 26px;
+            background: Palette.alternate-background;
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 12px;
+
+                if root.scanning: VerticalLayout {
+                    alignment: center;
+                    ProgressIndicator {
+                        width: 120px;
+                        height: 4px;
+                        indeterminate: true;
+                    }
+                }
+                Text {
+                    text: root.status;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: root.scan-info;
+                    color: Theme.muted;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: root.elevated ? "Administrator" : "Standardbenutzer";
+                    color: root.elevated ? Palette.accent-background : Theme.muted;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}

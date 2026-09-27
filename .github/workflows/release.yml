@@ -1,0 +1,39 @@
+name: Release
+
+# Push a tag like `v0.2.0` to publish a GitHub release with the executables.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+      - run: cargo test --workspace --locked
+      - run: cargo build --release --locked -p spacelens -p spacelens-cli
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "SpaceLens-${{ github.ref_name }}-windows-x64"
+          New-Item -ItemType Directory -Force $name | Out-Null
+          Copy-Item target/release/SpaceLens.exe, target/release/spacelens-cli.exe, README.md $name/
+          Compress-Archive -Path $name -DestinationPath "$name.zip"
+          (Get-FileHash "$name.zip" -Algorithm SHA256).Hash + "  $name.zip" | Out-File -Encoding ascii "$name.zip.sha256"
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            SpaceLens-*.zip
+            SpaceLens-*.zip.sha256
+          generate_release_notes: true

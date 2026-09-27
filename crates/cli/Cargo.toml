@@ -1,0 +1,18 @@
+[package]
+name = "spacelens-cli"
+description = "Kommandozeilen-Scanner und Benchmark für SpaceLens"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "spacelens-cli"
+path = "src/main.rs"
+
+[dependencies]
+spacelens-core.workspace = true
+spacelens-win.workspace = true
+
+[lints]
+workspace = true

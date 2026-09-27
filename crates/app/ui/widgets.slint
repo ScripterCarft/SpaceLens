@@ -1,0 +1,72 @@
+// Small shared building blocks. Colours follow the Fluent palette so the UI
+// adapts to the Windows light/dark setting automatically.
+
+import { Palette } from "std-widgets.slint";
+
+export global Theme {
+    out property <length> row-height: 24px;
+    out property <length> indent: 16px;
+    out property <brush> folder: #E3B341;
+    out property <brush> folder-stroke: #B8871E;
+    out property <brush> error: #D13438;
+    out property <brush> muted: Palette.foreground.with-alpha(0.6);
+    out property <brush> hover: Palette.foreground.with-alpha(0.05);
+    out property <brush> selected: Palette.accent-background.with-alpha(0.22);
+    out property <brush> divider: Palette.foreground.with-alpha(0.12);
+    out property <brush> bar-track: Palette.foreground.with-alpha(0.08);
+    out property <brush> bar-fill: Palette.accent-background;
+}
+
+export component FolderIcon inherits Path {
+    in property <bool> link;
+    width: 16px;
+    height: 16px;
+    viewbox-width: 16;
+    viewbox-height: 16;
+    commands: "M1.5 3.5 L6 3.5 L7.5 5 L14.5 5 L14.5 13.5 L1.5 13.5 Z";
+    fill: root.link ? transparent : Theme.folder;
+    stroke: Theme.folder-stroke;
+    stroke-width: 1px;
+}
+
+export component FileIcon inherits Path {
+    width: 16px;
+    height: 16px;
+    viewbox-width: 16;
+    viewbox-height: 16;
+    commands: "M3.5 1.5 L9.5 1.5 L12.5 4.5 L12.5 14.5 L3.5 14.5 Z M9.5 1.5 L9.5 4.5 L12.5 4.5";
+    fill: transparent;
+    stroke: Theme.muted;
+    stroke-width: 1px;
+}
+
+// Horizontal share bar, `fraction` in 0..1.
+export component SizeBar inherits Rectangle {
+    in property <float> fraction;
+    height: 8px;
+    border-radius: 2px;
+    background: Theme.bar-track;
+    Rectangle {
+        x: 0;
+        width: parent.width * clamp(root.fraction, 0, 1);
+        height: parent.height;
+        border-radius: parent.border-radius;
+        background: Theme.bar-fill;
+    }
+}
+
+// Navigation keys forwarded from FocusScopes to Rust.
+export enum NavKey { up, down, left, right, home, end, page-up, page-down, activate, back }
+
+// Disclosure chevron for tree rows (vector, independent of font coverage).
+export component Chevron inherits Path {
+    in property <bool> expanded;
+    width: 16px;
+    height: 16px;
+    viewbox-width: 16;
+    viewbox-height: 16;
+    commands: root.expanded ? "M4.5 6.5 L8 10 L11.5 6.5" : "M6.5 4.5 L10 8 L6.5 11.5";
+    stroke: Theme.muted;
+    stroke-width: 1.5px;
+    fill: transparent;
+}

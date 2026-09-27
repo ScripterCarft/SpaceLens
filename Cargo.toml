@@ -1,0 +1,43 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+default-members = ["crates/app", "crates/cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[workspace.dependencies]
+spacelens-core = { path = "crates/core" }
+spacelens-win = { path = "crates/win" }
+crossbeam-channel = "0.5"
+windows-sys = "0.61"
+slint = { version = "1.18", default-features = false }
+slint-build = "1.18"
+embed-resource = "3"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"
+undocumented_unsafe_blocks = "warn"
+dbg_macro = "warn"
+todo = "warn"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+debug = false
+panic = "unwind"
+incremental = false
+
+# Debug builds: optimise dependencies (Slint rendering, crossbeam) so dev runs stay responsive.
+[profile.dev.package."*"]
+opt-level = 2

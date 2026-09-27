@@ -1,0 +1,37 @@
+[package]
+name = "spacelens"
+description = "SpaceLens – schneller Disk-Analyzer für Windows"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+[[bin]]
+name = "SpaceLens"
+path = "src/main.rs"
+
+[dependencies]
+spacelens-core.workspace = true
+spacelens-win.workspace = true
+# Only what we use: winit backend + Slint's software renderer. It draws only
+# dirty regions and needs no GPU driver: ~8 MB private memory at idle instead
+# of ~80 MB with OpenGL, and it works identically over RDP and in VMs.
+# Enable the `gpu` feature for the OpenGL renderer (femtovg).
+slint = { workspace = true, features = [
+    "std",
+    "backend-winit",
+    "renderer-software",
+    "accessibility",
+    "compat-1-2",
+] }
+
+[features]
+gpu = ["slint/renderer-femtovg"]
+
+[build-dependencies]
+slint-build.workspace = true
+embed-resource.workspace = true
+
+[lints]
+workspace = true

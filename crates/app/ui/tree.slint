@@ -1,0 +1,121 @@
+// Folder navigation tree. Rows are a flattened, lazily expanded view that the
+// Rust side maintains; this component only renders the visible slice.
+
+import { ListView, Palette } from "std-widgets.slint";
+import { Theme, FolderIcon, SizeBar, NavKey, Chevron } from "widgets.slint";
+
+export struct TreeRow {
+    id: int,
+    depth: int,
+    name: string,
+    size: string,
+    fraction: float,
+    expandable: bool,
+    expanded: bool,
+    error: bool,
+    link: bool,
+}
+
+export component DirTree inherits Rectangle {
+    in property <[TreeRow]> rows;
+    in property <int> selected: -1;
+    out property <int> page-rows: max(1, floor(list.visible-height / Theme.row-height));
+
+    callback toggle(row: int);
+    callback select(row: int);
+    callback navigate(key: NavKey);
+
+    public function focus-list() {
+        fs.focus();
+    }
+
+    // Keeps the selected row inside the viewport when Rust moves the selection.
+    changed selected => {
+        if root.selected >= 0 {
+            if root.selected * Theme.row-height < -list.content-y {
+                list.content-y = -root.selected * Theme.row-height;
+            } else if (root.selected + 1) * Theme.row-height > -list.content-y + list.visible-height {
+                list.content-y = -((root.selected + 1) * Theme.row-height - list.visible-height);
+            }
+        }
+    }
+
+    background: Palette.background;
+
+    fs := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.UpArrow { root.navigate(NavKey.up); return accept; }
+            if event.text == Key.DownArrow { root.navigate(NavKey.down); return accept; }
+            if event.text == Key.LeftArrow { root.navigate(NavKey.left); return accept; }
+            if event.text == Key.RightArrow { root.navigate(NavKey.right); return accept; }
+            if event.text == Key.Home { root.navigate(NavKey.home); return accept; }
+            if event.text == Key.End { root.navigate(NavKey.end); return accept; }
+            if event.text == Key.PageUp { root.navigate(NavKey.page-up); return accept; }
+            if event.text == Key.PageDown { root.navigate(NavKey.page-down); return accept; }
+            if event.text == Key.Return { root.navigate(NavKey.activate); return accept; }
+            reject
+        }
+
+        list := ListView {
+            for row[i] in root.rows: Rectangle {
+                height: Theme.row-height;
+                background: i == root.selected ? Theme.selected : area.has-hover ? Theme.hover : transparent;
+
+                area := TouchArea {
+                    clicked => {
+                        fs.focus();
+                        root.select(i);
+                    }
+                    double-clicked => {
+                        root.toggle(i);
+                    }
+                }
+
+                HorizontalLayout {
+                    padding-left: 4px + row.depth * Theme.indent;
+                    padding-right: 8px;
+                    spacing: 4px;
+
+                    Rectangle {
+                        width: 16px;
+                        if row.expandable: Chevron {
+                            expanded: row.expanded;
+                        }
+                        TouchArea {
+                            enabled: row.expandable;
+                            clicked => {
+                                fs.focus();
+                                root.toggle(i);
+                            }
+                        }
+                    }
+
+                    FolderIcon {
+                        link: row.link;
+                    }
+
+                    Text {
+                        text: row.name;
+                        color: row.error ? Theme.error : Palette.foreground;
+                        overflow: elide;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+
+                    SizeBar {
+                        width: 44px;
+                        fraction: row.fraction;
+                    }
+
+                    Text {
+                        text: row.size;
+                        width: 64px;
+                        color: Theme.muted;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}

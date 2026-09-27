@@ -1,0 +1,7 @@
+/target
+*.pdb
+*.swp
+.vs/
+.idea/
+.vscode/*
+!.vscode/extensions.json

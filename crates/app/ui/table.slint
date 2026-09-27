@@ -1,0 +1,283 @@
+// Contents of the current directory. Virtualised via ListView; sorting and
+// formatting happen in Rust, so only visible rows are ever materialised.
+
+import { ListView, Palette } from "std-widgets.slint";
+import { Theme, FolderIcon, FileIcon, SizeBar, NavKey } from "widgets.slint";
+
+export struct EntryRow {
+    id: int,
+    name: string,
+    is-dir: bool,
+    size: string,
+    alloc: string,
+    fraction: float,
+    percent: string,
+    files: string,
+    modified: string,
+    error: bool,
+    link: bool,
+    dim: bool,
+}
+
+// Column ids shared with Rust (see `SortColumn` in models.rs).
+export global Columns {
+    out property <length> size: 92px;
+    out property <length> alloc: 92px;
+    out property <length> share: 132px;
+    out property <length> files: 84px;
+    out property <length> modified: 128px;
+}
+
+component Cell {
+    in property <string> text;
+    in property <TextHorizontalAlignment> align: left;
+    in property <brush> color: Palette.foreground;
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        Text {
+            text: root.text;
+            color: root.color;
+            horizontal-alignment: root.align;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+    }
+}
+
+component HeaderCell inherits Rectangle {
+    in property <string> title;
+    in property <bool> active;
+    in property <bool> descending;
+    in property <TextHorizontalAlignment> align: left;
+    callback clicked;
+
+    background: area.has-hover ? Theme.hover : transparent;
+    area := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 4px;
+        Text {
+            text: root.title;
+            font-weight: 600;
+            horizontal-alignment: root.align;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        Text {
+            text: root.active ? (root.descending ? "▼" : "▲") : "";
+            font-size: 9px;
+            color: Theme.muted;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component EntryTable inherits Rectangle {
+    in property <[EntryRow]> rows;
+    in property <int> selected: -1;
+    in property <int> sort-column;
+    in property <bool> sort-descending;
+    out property <int> page-rows: max(1, floor(list.visible-height / Theme.row-height));
+
+    callback select(row: int);
+    callback open(row: int);
+    callback reveal(row: int);
+    callback sort(column: int);
+    callback navigate(key: NavKey);
+
+    public function focus-list() {
+        fs.focus();
+    }
+
+    changed selected => {
+        if root.selected >= 0 {
+            if root.selected * Theme.row-height < -list.content-y {
+                list.content-y = -root.selected * Theme.row-height;
+            } else if (root.selected + 1) * Theme.row-height > -list.content-y + list.visible-height {
+                list.content-y = -((root.selected + 1) * Theme.row-height - list.visible-height);
+            }
+        }
+    }
+
+    // Reset scroll position when a different directory is shown.
+    changed rows => {
+        list.content-y = 0;
+    }
+
+    background: Palette.background;
+
+    VerticalLayout {
+        Rectangle {
+            height: 28px;
+            background: Palette.alternate-background;
+            HorizontalLayout {
+                HeaderCell {
+                    title: "Name";
+                    active: root.sort-column == 0;
+                    descending: root.sort-descending;
+                    horizontal-stretch: 1;
+                    clicked => { root.sort(0); }
+                }
+                HeaderCell {
+                    title: "Größe";
+                    width: Columns.size;
+                    align: right;
+                    active: root.sort-column == 1;
+                    descending: root.sort-descending;
+                    clicked => { root.sort(1); }
+                }
+                HeaderCell {
+                    title: "Belegt";
+                    width: Columns.alloc;
+                    align: right;
+                    active: root.sort-column == 2;
+                    descending: root.sort-descending;
+                    clicked => { root.sort(2); }
+                }
+                HeaderCell {
+                    title: "Anteil";
+                    width: Columns.share;
+                    active: root.sort-column == 3;
+                    descending: root.sort-descending;
+                    clicked => { root.sort(3); }
+                }
+                HeaderCell {
+                    title: "Dateien";
+                    width: Columns.files;
+                    align: right;
+                    active: root.sort-column == 4;
+                    descending: root.sort-descending;
+                    clicked => { root.sort(4); }
+                }
+                HeaderCell {
+                    title: "Geändert";
+                    width: Columns.modified;
+                    active: root.sort-column == 5;
+                    descending: root.sort-descending;
+                    clicked => { root.sort(5); }
+                }
+            }
+        }
+
+        Rectangle {
+            height: 1px;
+            background: Theme.divider;
+        }
+
+        fs := FocusScope {
+            vertical-stretch: 1;
+            key-pressed(event) => {
+                if event.text == Key.UpArrow { root.navigate(NavKey.up); return accept; }
+                if event.text == Key.DownArrow { root.navigate(NavKey.down); return accept; }
+                if event.text == Key.Home { root.navigate(NavKey.home); return accept; }
+                if event.text == Key.End { root.navigate(NavKey.end); return accept; }
+                if event.text == Key.PageUp { root.navigate(NavKey.page-up); return accept; }
+                if event.text == Key.PageDown { root.navigate(NavKey.page-down); return accept; }
+                if event.text == Key.Return { root.navigate(NavKey.activate); return accept; }
+                if event.text == Key.Backspace { root.navigate(NavKey.back); return accept; }
+                reject
+            }
+
+            list := ListView {
+                for row[i] in root.rows: Rectangle {
+                    height: Theme.row-height;
+                    background: i == root.selected ? Theme.selected : area.has-hover ? Theme.hover : transparent;
+
+                    area := TouchArea {
+                        clicked => {
+                            fs.focus();
+                            root.select(i);
+                        }
+                        double-clicked => {
+                            root.open(i);
+                        }
+                    }
+
+                    ContextMenuArea {
+                        Menu {
+                            MenuItem {
+                                title: "Öffnen";
+                                enabled: row.is-dir && !row.link;
+                                activated => { root.open(i); }
+                            }
+                            MenuItem {
+                                title: "Im Explorer anzeigen";
+                                activated => { root.reveal(i); }
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        spacing: 0px;
+
+                        HorizontalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 6px;
+                            padding-right: 8px;
+                            if row.is-dir: FolderIcon {
+                                link: row.link;
+                            }
+                            if !row.is-dir: FileIcon { }
+                            Text {
+                                text: row.name;
+                                color: row.error ? Theme.error : row.dim ? Theme.muted : Palette.foreground;
+                                overflow: elide;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+                        }
+                        Cell {
+                            text: row.size;
+                            width: Columns.size;
+                            align: right;
+                        }
+                        Cell {
+                            text: row.alloc;
+                            width: Columns.alloc;
+                            align: right;
+                            color: Theme.muted;
+                        }
+                        HorizontalLayout {
+                            width: Columns.share;
+                            padding-left: 8px;
+                            padding-right: 8px;
+                            spacing: 6px;
+                            SizeBar {
+                                horizontal-stretch: 1;
+                                fraction: row.fraction;
+                            }
+                            Text {
+                                text: row.percent;
+                                width: 48px;
+                                color: Theme.muted;
+                                horizontal-alignment: right;
+                                vertical-alignment: center;
+                            }
+                        }
+                        Cell {
+                            text: row.files;
+                            width: Columns.files;
+                            align: right;
+                            color: Theme.muted;
+                        }
+                        Cell {
+                            text: row.modified;
+                            width: Columns.modified;
+                            color: Theme.muted;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

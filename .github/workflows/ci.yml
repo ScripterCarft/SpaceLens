@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  # Builds the executables. Runs in parallel to the checks so the download is
+  # available as early as possible.
+  build:
+    name: Build SpaceLens.exe
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+      - name: Build (release)
+        run: cargo build --release --locked -p spacelens -p spacelens-cli
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/SpaceLens.exe, target/release/spacelens-cli.exe dist/
+          Get-ChildItem dist | Format-Table Name, Length
+      - uses: actions/upload-artifact@v7
+        with:
+          name: SpaceLens-${{ github.sha }}
+          path: dist/
+          retention-days: 14
+
+  check:
+    name: Format, Clippy, Tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: check
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
