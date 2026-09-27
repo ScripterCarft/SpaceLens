@@ -34,6 +34,8 @@ Die Exe ist nicht signiert. Beim ersten Start kann Windows SmartScreen warnen
 | Baum auf-/zuklappen | Pfeil oder Doppelklick | `→` / `←` |
 | Sortieren | Klick auf die Spaltenüberschrift | |
 | Im Explorer zeigen | Rechtsklick → *Im Explorer anzeigen* | |
+| Treemap | Maus darüber: Pfad + Größe · Klick: Eintrag markieren · Doppelklick: direkt hinspringen | |
+| Treemap ein-/ausblenden | *Ansicht* → *Treemap ausblenden* | |
 
 Kommandozeile: `SpaceLens.exe --scan D:\` startet direkt einen Scan.
 

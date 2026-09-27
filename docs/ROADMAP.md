@@ -15,8 +15,9 @@
 - Offen: Größenanalyse der Exe (`cargo bloat`), Slint-Features weiter reduzieren
 
 ## 0.3 – Analyse
-- Treemap (Squarified, in Rust berechnet, als Bild gerendert)
-- Statistik nach Dateityp/Endung, größte Dateien global, Filter/Suche
+- ✅ Treemap (Squarified, in Rust gerendert, Hover/Klick/Doppelklick, Legende)
+- ✅ Dateityp-Kategorien mit Summen pro Ordner
+- Größte Dateien global, Filter/Suche, Ansicht „nach Endung“
 - Fehlerliste (Ordner ohne Zugriff) als eigene Ansicht
 - Export (CSV)
 

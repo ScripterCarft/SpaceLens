@@ -13,16 +13,36 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use slint::{ComponentHandle, ModelRc, SharedString, Timer, TimerMode, VecModel};
-use spacelens_core::{NodeId, ScanError, ScanOptions, ScanOutcome, ScanProgress, Tree, flags, format};
+use slint::{
+    Color, ComponentHandle, Image, ModelRc, Rgb8Pixel, SharedPixelBuffer, SharedString, Timer, TimerMode, VecModel,
+};
+use spacelens_core::filetype::{self, Category};
+use spacelens_core::treemap::{Tile, Treemap};
+use spacelens_core::{NodeId, ScanError, ScanOptions, ScanOutcome, ScanProgress, Tree, flags, format, query};
 use spacelens_win::elevation::{self, RelaunchError};
 use spacelens_win::volumes::{self, Volume};
 use spacelens_win::{scanner_for, shell};
 
 use crate::models::{COL_NAME, EntryModel, TreeModel, sort_for_column};
-use crate::{MainWindow, NavKey};
+use crate::{LegendItem, MainWindow, NavKey, TreemapLabel};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// Resizing re-renders the treemap once the size has been stable this long.
+const TREEMAP_DEBOUNCE: Duration = Duration::from_millis(60);
+/// Background (= border colour source) of the treemap image; matches treemap.slint.
+const TREEMAP_BACKGROUND: [u8; 3] = [0x20, 0x20, 0x20];
+
+/// Treemap of the current directory, kept for hit-testing.
+#[derive(Default)]
+struct TreemapState {
+    map: Treemap,
+    /// Directory the legend was computed for (it is independent of the size).
+    legend_dir: Option<NodeId>,
+    /// Drawing area in logical pixels and the scale factor used to render.
+    logical: (f32, f32),
+    scale: f32,
+    hovered: Option<NodeId>,
+}
 
 struct ScanJob {
     progress: Arc<ScanProgress>,
@@ -45,6 +65,8 @@ pub struct App {
     tree_model: Rc<TreeModel>,
     entry_model: Rc<EntryModel>,
     poll_timer: Timer,
+    treemap: RefCell<TreemapState>,
+    treemap_timer: Timer,
     elevated: bool,
     state: RefCell<State>,
 }
@@ -69,6 +91,8 @@ impl App {
             tree_model: Rc::new(TreeModel::default()),
             entry_model: Rc::new(EntryModel::default()),
             poll_timer: Timer::default(),
+            treemap: RefCell::new(TreemapState::default()),
+            treemap_timer: Timer::default(),
             elevated,
             state: RefCell::new(State {
                 tree: None,
@@ -105,6 +129,11 @@ impl App {
         bind!(&app, ui, on_entry_navigate => entry_navigate(key));
         bind!(&app, ui, on_sort_by => sort_by(column));
         bind!(&app, ui, on_show_about => show_about());
+        bind!(&app, ui, on_treemap_resized => treemap_resized(width, height));
+        bind!(&app, ui, on_treemap_hovered => treemap_hovered(x, y));
+        bind!(&app, ui, on_treemap_left => treemap_left());
+        bind!(&app, ui, on_treemap_clicked => treemap_clicked(x, y));
+        bind!(&app, ui, on_treemap_double_clicked => treemap_double_clicked(x, y));
         bind!(&app, ui, on_quit => quit());
 
         app.refresh_drives();
@@ -287,6 +316,10 @@ impl App {
             ui.set_tree_selected(-1);
             ui.set_entry_selected(-1);
         }
+        self.treemap.borrow_mut().legend_dir = None;
+        if !has_tree {
+            self.clear_treemap();
+        }
         if has_tree {
             self.navigate_to(Tree::ROOT, None);
             if let Some(ui) = self.ui() {
@@ -348,6 +381,7 @@ impl App {
             )
             .into(),
         );
+        self.render_treemap();
     }
 
     fn go_up(&self) {
@@ -527,6 +561,150 @@ impl App {
         }
     }
 
+    // ---------------------------------------------------------- treemap
+
+    fn treemap_resized(self: &Rc<Self>, width: f32, height: f32) {
+        self.treemap.borrow_mut().logical = (width, height);
+        let weak = Rc::downgrade(self);
+        self.treemap_timer.start(TimerMode::SingleShot, TREEMAP_DEBOUNCE, move || {
+            if let Some(app) = weak.upgrade() {
+                app.render_treemap();
+            }
+        });
+    }
+
+    fn clear_treemap(&self) {
+        let mut tm = self.treemap.borrow_mut();
+        tm.map = Treemap::default();
+        tm.hovered = None;
+        if let Some(ui) = self.ui() {
+            ui.set_treemap_image(Image::default());
+            ui.set_treemap_labels(ModelRc::default());
+            ui.set_treemap_legend(ModelRc::default());
+            ui.set_treemap_hover_visible(false);
+        }
+    }
+
+    /// Lays out and draws the current directory at the panel's physical size.
+    fn render_treemap(&self) {
+        let Some(ui) = self.ui() else { return };
+        if !ui.get_treemap_visible() {
+            return;
+        }
+        let (tree, dir) = {
+            let st = self.state.borrow();
+            (st.tree.clone(), st.current)
+        };
+        let Some(tree) = tree else { return self.clear_treemap() };
+        let (w, h) = self.treemap.borrow().logical;
+        if w < 1.0 || h < 1.0 {
+            return;
+        }
+        let scale = ui.window().scale_factor().max(0.5);
+        let (pw, ph) = ((w * scale).round() as u32, (h * scale).round() as u32);
+
+        let map = Treemap::layout(&tree, dir, pw, ph);
+        let mut pixels = SharedPixelBuffer::<Rgb8Pixel>::new(pw, ph);
+        map.render(pixels.make_mut_bytes(), TREEMAP_BACKGROUND);
+        ui.set_treemap_image(Image::from_rgb8(pixels));
+
+        let labels: Vec<TreemapLabel> = map
+            .tiles
+            .iter()
+            .filter(|t| t.depth == 0 && t.rect.w / scale >= 70.0 && t.rect.h / scale >= 24.0)
+            .take(64)
+            .map(|t| TreemapLabel {
+                x: t.rect.x / scale,
+                y: t.rect.y / scale,
+                width: t.rect.w / scale,
+                height: t.rect.h / scale,
+                text: format!("{}  {}", tree.name(t.node), format::bytes(tree.node(t.node).size)).into(),
+            })
+            .collect();
+        ui.set_treemap_labels(ModelRc::new(VecModel::from(labels)));
+        ui.set_treemap_hover_visible(false);
+
+        let mut tm = self.treemap.borrow_mut();
+        tm.map = map;
+        tm.scale = scale;
+        tm.hovered = None;
+        if tm.legend_dir != Some(dir) {
+            tm.legend_dir = Some(dir);
+            ui.set_treemap_legend(ModelRc::new(VecModel::from(legend(&tree, dir))));
+        }
+    }
+
+    /// Deepest tile under a point given in logical pixels.
+    fn treemap_hit(&self, x: f32, y: f32) -> Option<Tile> {
+        let tm = self.treemap.borrow();
+        tm.map.hit(x * tm.scale, y * tm.scale).copied()
+    }
+
+    fn treemap_hovered(&self, x: f32, y: f32) {
+        let Some(tile) = self.treemap_hit(x, y) else { return self.treemap_left() };
+        let scale = {
+            let mut tm = self.treemap.borrow_mut();
+            if tm.hovered == Some(tile.node) {
+                return;
+            }
+            tm.hovered = Some(tile.node);
+            tm.scale
+        };
+        let Some(tree) = self.state.borrow().tree.clone() else { return };
+        let Some(ui) = self.ui() else { return };
+        ui.set_treemap_hover_x(tile.rect.x / scale);
+        ui.set_treemap_hover_y(tile.rect.y / scale);
+        ui.set_treemap_hover_width(tile.rect.w / scale);
+        ui.set_treemap_hover_height(tile.rect.h / scale);
+        ui.set_treemap_hover_visible(true);
+        let kind = tile.category.map_or("Ordner", Category::label);
+        ui.set_status(
+            format!("{}  ·  {}  ·  {kind}", tree.path(tile.node), format::bytes(tree.node(tile.node).size)).into(),
+        );
+    }
+
+    fn treemap_left(&self) {
+        self.treemap.borrow_mut().hovered = None;
+        if let Some(ui) = self.ui() {
+            ui.set_treemap_hover_visible(false);
+        }
+    }
+
+    /// Click: select the table row (direct child of the current directory)
+    /// that contains the clicked file.
+    fn treemap_clicked(&self, x: f32, y: f32) {
+        let Some(tile) = self.treemap_hit(x, y) else { return };
+        let (tree, current) = {
+            let st = self.state.borrow();
+            (st.tree.clone(), st.current)
+        };
+        let Some(tree) = tree else { return };
+        let chain = tree.ancestry(tile.node);
+        let Some(pos) = chain.iter().position(|&n| n == current) else { return };
+        if let Some(&child) = chain.get(pos + 1)
+            && let Some(row) = self.entry_model.row_of(child)
+        {
+            self.entry_select(row as i32);
+        }
+        if let Some(ui) = self.ui() {
+            ui.set_status(format!("{}  ·  {}", tree.path(tile.node), format::bytes(tree.node(tile.node).size)).into());
+            ui.invoke_focus_table();
+        }
+    }
+
+    /// Double click: jump straight to the clicked item – into a folder, or to
+    /// a file's folder with the file selected.
+    fn treemap_double_clicked(&self, x: f32, y: f32) {
+        let Some(tile) = self.treemap_hit(x, y) else { return };
+        let Some(tree) = self.state.borrow().tree.clone() else { return };
+        let node = tree.node(tile.node);
+        if node.is_dir() && !node.has(flags::NOT_FOLLOWED) {
+            self.navigate_to(tile.node, None);
+        } else if let Some(parent) = tree.parent(tile.node) {
+            self.navigate_to(parent, Some(tile.node));
+        }
+    }
+
     // ------------------------------------------------------------ misc
 
     fn show_about(&self) {
@@ -565,4 +743,28 @@ fn drive_label(v: &Volume) -> SharedString {
         format::bytes(v.total)
     )
     .into()
+}
+
+/// Legend entries: categories present below `dir`, largest first.
+fn legend(tree: &Tree, dir: NodeId) -> Vec<LegendItem> {
+    let sums = filetype::totals(tree, dir);
+    let total: u64 = sums.iter().sum();
+    let mut cats: Vec<Category> = Category::ALL.into_iter().filter(|&c| sums[c as usize] > 0).collect();
+    cats.sort_unstable_by_key(|&c| std::cmp::Reverse(sums[c as usize]));
+    cats.into_iter()
+        .map(|c| {
+            let [r, g, b] = c.rgb();
+            let bytes = sums[c as usize];
+            LegendItem {
+                color: Color::from_rgb_u8(r, g, b),
+                text: format!(
+                    "{} {} ({})",
+                    c.label(),
+                    format::bytes(bytes),
+                    format::percent(query::fraction(bytes, total))
+                )
+                .into(),
+            }
+        })
+        .collect()
 }

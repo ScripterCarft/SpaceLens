@@ -4,8 +4,9 @@ import { Button, ComboBox, LineEdit, Palette, ProgressIndicator } from "std-widg
 import { Theme, NavKey } from "widgets.slint";
 import { DirTree, TreeRow } from "tree.slint";
 import { EntryTable, EntryRow } from "table.slint";
+import { TreemapView, TreemapLabel, LegendItem } from "treemap.slint";
 
-export { TreeRow, EntryRow, NavKey }
+export { TreeRow, EntryRow, NavKey, TreemapLabel, LegendItem }
 
 export component MainWindow inherits Window {
     title: "SpaceLens";
@@ -38,6 +39,17 @@ export component MainWindow inherits Window {
     in property <string> location-info;
     in property <bool> can-go-up;
 
+    // --- treemap ---
+    in-out property <bool> treemap-visible: true;
+    in property <image> treemap-image;
+    in property <[TreemapLabel]> treemap-labels;
+    in property <[LegendItem]> treemap-legend;
+    in property <bool> treemap-hover-visible;
+    in property <length> treemap-hover-x;
+    in property <length> treemap-hover-y;
+    in property <length> treemap-hover-width;
+    in property <length> treemap-hover-height;
+
     // --- status bar ---
     in property <string> status;
     in property <string> scan-info;
@@ -60,6 +72,11 @@ export component MainWindow inherits Window {
     callback entry-reveal(row: int);
     callback entry-navigate(key: NavKey);
     callback sort-by(column: int);
+    callback treemap-resized(width: length, height: length);
+    callback treemap-hovered(x: length, y: length);
+    callback treemap-left();
+    callback treemap-clicked(x: length, y: length);
+    callback treemap-double-clicked(x: length, y: length);
     callback show-about();
     callback quit();
 
@@ -68,6 +85,7 @@ export component MainWindow inherits Window {
     }
 
     property <length> tree-width: 340px;
+    property <length> treemap-height: 300px;
 
     MenuBar {
         Menu {
@@ -109,6 +127,13 @@ export component MainWindow inherits Window {
                 title: "Im Explorer anzeigen";
                 enabled: root.has-tree;
                 activated => { root.reveal-current(); }
+            }
+        }
+        Menu {
+            title: "Ansicht";
+            MenuItem {
+                title: root.treemap-visible ? "Treemap ausblenden" : "Treemap einblenden";
+                activated => { root.treemap-visible = !root.treemap-visible; }
             }
         }
         Menu {
@@ -251,6 +276,35 @@ export component MainWindow inherits Window {
                         reveal(row) => { root.entry-reveal(row); }
                         sort(column) => { root.sort-by(column); }
                         navigate(key) => { root.entry-navigate(key); }
+                    }
+
+                    // Draggable splitter between table and treemap.
+                    if root.treemap-visible: Rectangle {
+                        height: 5px;
+                        background: hsplit.has-hover || hsplit.pressed ? Theme.bar-fill.with-alpha(0.4) : Theme.divider;
+                        hsplit := TouchArea {
+                            mouse-cursor: row-resize;
+                            moved => {
+                                root.treemap-height = clamp(root.treemap-height - (self.mouse-y - self.pressed-y), 120px, root.height - 320px);
+                            }
+                        }
+                    }
+
+                    if root.treemap-visible: TreemapView {
+                        height: root.treemap-height;
+                        image: root.treemap-image;
+                        labels: root.treemap-labels;
+                        legend: root.treemap-legend;
+                        hover-visible: root.treemap-hover-visible;
+                        hover-x: root.treemap-hover-x;
+                        hover-y: root.treemap-hover-y;
+                        hover-width: root.treemap-hover-width;
+                        hover-height: root.treemap-hover-height;
+                        resized(w, h) => { root.treemap-resized(w, h); }
+                        hovered(x, y) => { root.treemap-hovered(x, y); }
+                        left => { root.treemap-left(); }
+                        clicked(x, y) => { root.treemap-clicked(x, y); }
+                        double-clicked(x, y) => { root.treemap-double-clicked(x, y); }
                     }
                 }
             }

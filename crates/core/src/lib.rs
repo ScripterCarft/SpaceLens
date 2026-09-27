@@ -11,11 +11,13 @@
 #![forbid(unsafe_code)]
 
 pub mod builder;
+pub mod filetype;
 pub mod format;
 pub mod names;
 pub mod query;
 pub mod scan;
 pub mod tree;
+pub mod treemap;
 
 pub use builder::{RawEntry, TreeBuilder};
 pub use scan::{ScanError, ScanOptions, ScanOutcome, ScanProgress, ScanSnapshot, Scanner};

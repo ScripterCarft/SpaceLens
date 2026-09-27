@@ -128,6 +128,14 @@ Hardlinks doppelt.
   `row_data` formatiert eine Zeile erst, wenn Slint sie anzeigt.
 - `app.rs` ist der Controller. Er läuft komplett im UI-Thread; der Scan läuft in
   einem eigenen Thread, der Fortschritt wird per 10-Hz-Timer aus Atomics gelesen.
+- **Treemap** (`core/src/treemap.rs`, `ui/treemap.slint`): Squarified-Layout in
+  Rust, gezeichnet direkt in einen RGB-Puffer mit Kissen-Schattierung und als ein
+  einziges Bild an Slint übergeben. Beschriftungen, Hover-Rahmen und Legende sind
+  leichte Overlays. Beim Größeändern wird nach 60 ms Ruhe neu gezeichnet. Gemessen
+  auf C: (200 000 Kacheln, 1600×450): Layout ≈12 ms, Zeichnen ≈7 ms.
+- **Dateitypen** (`core/src/filetype.rs`): ~130 Endungen → 10 Kategorien
+  (Farbe + Legende). Summen pro Kategorie ≈15 ms über 600 000 Einträge, nur bei
+  Ordnerwechsel neu berechnet.
 - Renderer ist der Slint-Software-Renderer: ≈8 MB privater Speicher im Leerlauf
   gegenüber ≈80 MB mit OpenGL, und kein GPU-Treiber im Prozess.
 

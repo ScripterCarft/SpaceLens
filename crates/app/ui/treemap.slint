@@ -1,0 +1,142 @@
+// Treemap panel: a pre-rendered image (Rust draws all tiles into one pixel
+// buffer) plus lightweight overlays for labels, hover frame and legend.
+
+import { Palette } from "std-widgets.slint";
+import { Theme } from "widgets.slint";
+
+export struct TreemapLabel {
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+    text: string,
+}
+
+export struct LegendItem {
+    color: color,
+    text: string,
+}
+
+export component TreemapView inherits Rectangle {
+    in property <image> image;
+    in property <[TreemapLabel]> labels;
+    in property <[LegendItem]> legend;
+    in property <bool> hover-visible;
+    in property <length> hover-x;
+    in property <length> hover-y;
+    in property <length> hover-width;
+    in property <length> hover-height;
+
+    /// Size of the drawing area in logical pixels (Rust renders physical ones).
+    callback resized(width: length, height: length);
+    callback hovered(x: length, y: length);
+    callback left();
+    callback clicked(x: length, y: length);
+    callback double-clicked(x: length, y: length);
+
+    background: #202020;
+
+    VerticalLayout {
+        area := Rectangle {
+            vertical-stretch: 1;
+            clip: true;
+
+            init => {
+                root.resized(self.width, self.height);
+            }
+            changed width => {
+                root.resized(self.width, self.height);
+            }
+            changed height => {
+                root.resized(self.width, self.height);
+            }
+
+            Image {
+                width: parent.width;
+                height: parent.height;
+                source: root.image;
+                image-fit: fill;
+                image-rendering: pixelated;
+            }
+
+            for label in root.labels: Rectangle {
+                x: label.x + 3px;
+                y: label.y + 3px;
+                width: min(label.width - 6px, caption.preferred-width + 10px);
+                height: 18px;
+                border-radius: 3px;
+                background: #000000A0;
+                caption := Text {
+                    x: 5px;
+                    width: parent.width - 10px;
+                    text: label.text;
+                    color: #FFFFFF;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+
+            if root.hover-visible: Rectangle {
+                x: root.hover-x;
+                y: root.hover-y;
+                width: root.hover-width;
+                height: root.hover-height;
+                border-width: 2px;
+                border-color: #FFFFFF;
+            }
+
+            touch := TouchArea {
+                mouse-cursor: pointer;
+                changed mouse-x => {
+                    if self.has-hover { root.hovered(self.mouse-x, self.mouse-y); }
+                }
+                changed mouse-y => {
+                    if self.has-hover { root.hovered(self.mouse-x, self.mouse-y); }
+                }
+                changed has-hover => {
+                    if !self.has-hover { root.left(); }
+                }
+                clicked => {
+                    root.clicked(self.mouse-x, self.mouse-y);
+                }
+                double-clicked => {
+                    root.double-clicked(self.mouse-x, self.mouse-y);
+                }
+            }
+        }
+
+        Rectangle {
+            background: Palette.alternate-background;
+            height: 24px;
+            // The legend may be wider than the panel: clip it instead of letting
+            // its width push the whole window layout.
+            min-width: 0px;
+            clip: true;
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 14px;
+                alignment: start;
+                for item in root.legend: HorizontalLayout {
+                    spacing: 5px;
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 10px;
+                            height: 10px;
+                            border-radius: 2px;
+                            background: item.color;
+                        }
+                    }
+                    Text {
+                        text: item.text;
+                        color: Theme.muted;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}
