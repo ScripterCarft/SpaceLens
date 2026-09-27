@@ -98,6 +98,27 @@ fn query(letter: char) -> Option<Volume> {
     Some(Volume { root, label: from_wide_z(&label), fs: from_wide_z(&fs), total, free, kind })
 }
 
+/// File system name of a volume root such as `C:\`, e.g. `NTFS`.
+pub fn file_system(root: &str) -> Option<String> {
+    let root_w = wide_nul(root);
+    let mut fs = [0u16; 64];
+    // SAFETY: `root_w` is NUL-terminated; the output buffer is live and its
+    // size is passed; unused out parameters are null.
+    let ok = unsafe {
+        GetVolumeInformationW(
+            root_w.as_ptr(),
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            fs.as_mut_ptr(),
+            fs.len() as u32,
+        )
+    };
+    (ok != 0).then(|| from_wide_z(&fs))
+}
+
 fn from_wide_z(buf: &[u16]) -> String {
     let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
     String::from_utf16_lossy(&buf[..end])

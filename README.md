@@ -4,7 +4,9 @@ Schneller, sparsamer Disk-Analyzer für Windows 10/11, geschrieben in Rust mit
 nativer [Slint](https://slint.dev)-Oberfläche. Kein WebView, keine Installation:
 eine einzelne `SpaceLens.exe`.
 
-- Paralleler Scan: ≈600 000 Einträge in unter 1 s (NVMe, warmer Cache)
+- Als Administrator: liest die NTFS-Master-File-Table direkt – C: mit 650 000
+  Einträgen in ≈0,4 s, Hardlinks exakt einmal gezählt
+- Als Standardbenutzer: paralleler Verzeichnis-Scan, ≈600 000 Einträge in unter 1 s
 - ≈77 Bytes RAM pro Datei, ≈8 MB Grundverbrauch der Oberfläche
 - Nur lesend: öffnet keine Dateien, folgt keinen Junctions/Symlinks und lädt
   keine OneDrive-Dateien herunter
@@ -38,7 +40,7 @@ Kommandozeile: `SpaceLens.exe --scan D:\` startet direkt einen Scan.
 Benchmark ohne Oberfläche:
 
 ```
-spacelens-cli.exe C:\ --top 10 [--threads N] [--quiet]
+spacelens-cli.exe C:\ --top 10 [--method auto|walk|mft] [--threads N] [--quiet]
 ```
 
 ## Selbst bauen

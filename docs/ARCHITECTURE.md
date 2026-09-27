@@ -10,7 +10,7 @@
        │  Arc<Tree>, Arc<ScanProgress>
 ┌──────┴──────────────────┴───────┐
 │ spacelens-win                    │    Win32: Scanner, Laufwerke, UAC, Explorer
-│  walker (parallel)  [mft: TODO]  │
+│  mft (Admin) │ walker (Fallback) │
 └──────┬───────────────────────────┘
        │  RawEntry-Listings
 ┌──────┴───────────────────────────┐
@@ -70,13 +70,45 @@ Coordinator ───────────────► N Worker ───�
   (FAT/exFAT, manche SMB-Server), schaltet der Scanner einmalig auf
   `FileFullDirectoryInfo` um.
 
-Messung auf C: (NVMe, 12 Threads, warmer Cache): ≈600 000 Einträge in ≈0,86 s.
+Messung auf C: (NVMe, 12 Threads, warmer Cache): ≈600 000 Einträge in ≈0,86 s
+(als Standardbenutzer), 652 000 Einträge in 1,57 s als Administrator.
 
 **Bekannte Grenzen (Walker)**
 - Hardlinks werden pro Link gezählt, wie im Explorer. Exakt geht das nur mit
   Link-Zählern aus der MFT.
 - Ohne Adminrechte fehlen geschützte Ordner. Sie werden als Fehler markiert und
   in der Statuszeile gezählt.
+
+## Scanner: NTFS-MFT (`win/src/mft/`, nur Admin)
+
+Wird automatisch gewählt (`AutoScanner`), wenn der Prozess Adminrechte hat und
+ein ganzes NTFS-Laufwerk gescannt wird. Scheitert er mit `Unsupported`, übernimmt
+der Walker.
+
+```
+read_plan: Datensatz 0 ($MFT) → Datenbereiche (Runlist) + $MFT:$BITMAP
+           → Leseaufträge ≤ 4 MiB, freie 64-KiB-Blöcke werden übersprungen
+2 Reader  ──AlignedBuf (NO_BUFFERING)──► N Parser (Fixups, Attribute, Namen→WTF-8)
+    ▲                                         │
+    └──────────── Puffer-Recycling ◄──────────┘──► Koordinator: Record-Tabelle
+build_tree: CSR-Kinderlisten, pro Ordner nach Record sortiert, Breitensuche ab Record 5
+```
+
+- Parser (`record.rs`) ist reiner, sicherer Code mit Bounds-Checks und wird mit
+  synthetischen Datensätzen getestet (Fixups, Hardlinks, Extension-Records,
+  Sparse-Dateien, DOS-Namen, Junctions).
+- **Hardlinks**: Die Größe zählt beim ersten Link in Breitensuche-Reihenfolge,
+  alle weiteren Links bekommen 0 Bytes und das Flag `HARDLINK`. Die Summe
+  entspricht damit dem tatsächlich belegten Platz.
+- Enthält auch NTFS-Metadateien (`$MFT`, `$LogFile`, `$Bitmap` …).
+- Gezählt wird nur der unbenannte Datenstrom (wie der Walker); Alternate Data
+  Streams folgen später.
+
+Messung auf C: (PCIe-3-NVMe, 1,3 GB MFT, 652 000 Einträge): **0,42 s**, davon
+~70 ms beim ersten Lesen des Volumes (Windows), ~310 ms Lesen+Parsen von
+633 MiB (≈2 GB/s, Grenze der SSD; 1–8 Reader gleich schnell) und ~40 ms
+Baumaufbau. Der Walker braucht mit Adminrechten 1,57 s und zählt 12 GB
+Hardlinks doppelt.
 
 ## Rechte (`win/src/elevation.rs`)
 

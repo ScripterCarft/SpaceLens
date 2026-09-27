@@ -435,6 +435,8 @@ impl App {
                 info.push_str("  ·  Verknüpfung (Junction/Symlink) – nicht mitgezählt");
             } else if n.has(flags::ERROR) {
                 info.push_str("  ·  Zugriff verweigert oder unvollständig gelesen");
+            } else if n.has(flags::HARDLINK) {
+                info.push_str("  ·  Weiterer Hardlink – Größe wird beim ersten Link gezählt");
             } else if n.has(flags::CLOUD) {
                 info.push_str("  ·  Cloud-Datei (nicht vollständig lokal gespeichert)");
             }

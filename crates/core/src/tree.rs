@@ -48,6 +48,9 @@ pub mod flags {
     pub const SPARSE: u16 = 1 << 7;
     /// Content is (partially) not stored locally (cloud file / offline).
     pub const CLOUD: u16 = 1 << 8;
+    /// Additional hard link of a file whose size is already counted at
+    /// another link (MFT scan only).
+    pub const HARDLINK: u16 = 1 << 9;
 }
 
 /// One file or directory. 40 bytes.

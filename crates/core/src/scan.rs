@@ -109,6 +109,9 @@ pub enum ScanError {
     InvalidRoot { path: String, code: u32 },
     /// The tree grew beyond its 32-bit limits.
     Capacity,
+    /// This scanner cannot handle the root (wrong file system, missing
+    /// rights, …). Callers may fall back to another scanner.
+    Unsupported(String),
     /// A bug (e.g. a panic) inside the scanner; the scan was aborted.
     Internal(String),
 }
@@ -120,6 +123,7 @@ impl fmt::Display for ScanError {
                 write!(f, "\u{201E}{path}\u{201C} kann nicht gelesen werden (Fehler {code})")
             }
             Self::Capacity => f.write_str("Zu viele Einträge für einen Scan"),
+            Self::Unsupported(why) => write!(f, "Scan-Methode nicht verfügbar: {why}"),
             Self::Internal(msg) => write!(f, "Interner Fehler: {msg}"),
         }
     }

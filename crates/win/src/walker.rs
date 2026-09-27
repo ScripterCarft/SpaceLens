@@ -407,28 +407,7 @@ fn push_entry(h: &EntryHeader, name: &[u16], dir_path: &[u16], out: &mut Listing
     }
 
     let is_dir = h.attrs & FILE_ATTRIBUTE_DIRECTORY != 0;
-    let is_reparse = h.attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0;
-    let mut f = 0u16;
-    if is_dir {
-        f |= flags::DIR;
-    }
-    if is_reparse {
-        f |= flags::REPARSE;
-        if is_dir && is_name_surrogate(h.reparse_tag) {
-            f |= flags::NOT_FOLLOWED;
-        }
-    }
-    for (attr, flag) in [
-        (FILE_ATTRIBUTE_HIDDEN, flags::HIDDEN),
-        (FILE_ATTRIBUTE_SYSTEM, flags::SYSTEM),
-        (FILE_ATTRIBUTE_COMPRESSED, flags::COMPRESSED),
-        (FILE_ATTRIBUTE_SPARSE_FILE, flags::SPARSE),
-        (FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_OFFLINE, flags::CLOUD),
-    ] {
-        if h.attrs & attr != 0 {
-            f |= flag;
-        }
-    }
+    let f = node_flags(h.attrs, is_dir, h.reparse_tag);
 
     let (size, alloc) = if is_dir {
         (0, 0)
@@ -461,6 +440,33 @@ fn push_entry(h: &EntryHeader, name: &[u16], dir_path: &[u16], out: &mut Listing
     }
 }
 
+/// Maps Win32 file attributes to node flags. Shared with the MFT scanner,
+/// whose `$STANDARD_INFORMATION` lacks the directory bit (hence `is_dir`).
+pub(crate) fn node_flags(attrs: u32, is_dir: bool, reparse_tag: u32) -> u16 {
+    let mut f = 0u16;
+    if is_dir {
+        f |= flags::DIR;
+    }
+    if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        f |= flags::REPARSE;
+        if is_dir && is_name_surrogate(reparse_tag) {
+            f |= flags::NOT_FOLLOWED;
+        }
+    }
+    for (attr, flag) in [
+        (FILE_ATTRIBUTE_HIDDEN, flags::HIDDEN),
+        (FILE_ATTRIBUTE_SYSTEM, flags::SYSTEM),
+        (FILE_ATTRIBUTE_COMPRESSED, flags::COMPRESSED),
+        (FILE_ATTRIBUTE_SPARSE_FILE, flags::SPARSE),
+        (FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_OFFLINE, flags::CLOUD),
+    ] {
+        if attrs & attr != 0 {
+            f |= flag;
+        }
+    }
+    f
+}
+
 /// `IsReparseTagNameSurrogate`: the tag makes the entry an alias for another
 /// name (symlink, junction, mount point). Cloud-file tags are *not* name
 /// surrogates, so OneDrive folders are scanned normally.
@@ -471,7 +477,7 @@ fn is_name_surrogate(tag: u32) -> bool {
 
 /// FILETIME (100 ns since 1601) → Unix seconds, clamped to `u32`.
 #[inline]
-fn filetime_to_unix(ft: i64) -> u32 {
+pub(crate) fn filetime_to_unix(ft: i64) -> u32 {
     const EPOCH_DIFF_SECS: i64 = 11_644_473_600;
     let secs = ft / 10_000_000 - EPOCH_DIFF_SECS;
     secs.clamp(0, i64::from(u32::MAX)) as u32

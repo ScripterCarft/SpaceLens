@@ -7,12 +7,12 @@
 - UAC-Neustart über `runas`, SeBackupPrivilege, Manifest, statische CRT
 - CLI-Benchmark, CI (fmt/clippy/test/build), Release-Workflow
 
-## 0.2 – Geschwindigkeit
-- **NTFS-MFT-Scanner** (Admin): `$MFT` direkt lesen (FSCTL_GET_NTFS_VOLUME_DATA,
-  Retrieval Pointers, FILE-Records inkl. Fixups, `$ATTRIBUTE_LIST`,
-  nicht-residente `$DATA`). Ziel: C: in < 3 s kalt. Exakte Hardlink-Deduplizierung.
-- Automatische Auswahl in `scanner_for` (NTFS + Admin + Laufwerkswurzel → MFT)
-- Größenanalyse der Exe (`cargo bloat`), Slint-Features weiter reduzieren
+## 0.2 – Geschwindigkeit ✅ (MFT)
+- NTFS-MFT-Scanner (Admin): Bitmap-gestützt, parallel geparst, Hardlinks exakt,
+  C: in 0,42 s. Automatische Auswahl mit Walker-Fallback.
+- Offen: MFT auch für Unterordner (Teilbaum aus dem Volume-Scan), `$MFT` mit
+  `$ATTRIBUTE_LIST` (extrem fragmentiert), Alternate Data Streams
+- Offen: Größenanalyse der Exe (`cargo bloat`), Slint-Features weiter reduzieren
 
 ## 0.3 – Analyse
 - Treemap (Squarified, in Rust berechnet, als Bild gerendert)

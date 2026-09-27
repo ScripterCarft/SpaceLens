@@ -10,7 +10,8 @@ sparsam, stabil.
 crates/
   core/   spacelens-core  Datenmodell (Tree), Builder, Aggregation, Abfragen, Formatierung.
                           Plattformunabhängig, #![forbid(unsafe_code)], keine I/O.
-  win/    spacelens-win   Windows-Schicht: Scanner, Laufwerke, UAC/Rechte, Explorer.
+  win/    spacelens-win   Windows-Schicht: Scanner (mft/ = NTFS-MFT, walker = Verzeichnisse),
+                          Laufwerke, UAC/Rechte, Explorer.
                           Einziger Ort mit `unsafe` (Win32 über windows-sys).
   cli/    spacelens-cli   Headless-Scanner & Benchmark.
   app/    spacelens       Slint-GUI (SpaceLens.exe). ui/*.slint + src/{main,app,models}.rs
@@ -29,6 +30,8 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 target/release/spacelens-cli.exe C:\ --top 10   # Benchmark (Dauer, Einträge/s, Bytes/Eintrag)
+target/release/spacelens-cli.exe C:\ --method mft # auto | walk | mft (mft braucht Admin)
+SPACELENS_TRACE=1                               # Phasenzeiten des MFT-Scanners auf stderr
 target/release/SpaceLens.exe --scan C:\
 ```
 
@@ -43,6 +46,8 @@ Release-Build. Tags `v*` erzeugen ein GitHub-Release (`release.yml`).
 - Reparse-Points mit Name-Surrogate-Tag (Symlink, Junction, Mountpoint) werden
   **nie verfolgt** (Flag `NOT_FOLLOWED`). Cloud-Tags (OneDrive) sind keine Surrogates.
 - Pfade für Win32 immer verbatim (`\\?\`), Namen verlustfrei (WTF-8 in `core::names`).
+- MFT-Parser (`win/src/mft/record.rs`) bleibt frei von `unsafe`; jede Leseoperation
+  bounds-geprüft, defekte Datensätze werden übersprungen.
 - Fehler pro Verzeichnis werden gesammelt (`ScanIssue`), nie abbrechen.
 - Kein `unwrap()` außerhalb von Tests (Clippy `unwrap_used = deny`). Worker fangen
   Panics pro Verzeichnis (`catch_unwind`).

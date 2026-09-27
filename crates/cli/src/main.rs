@@ -1,7 +1,7 @@
 //! `spacelens-cli` – headless scanner for benchmarking and scripting.
 //!
 //! ```text
-//! spacelens-cli <PFAD> [--threads N] [--top N] [--quiet]
+//! spacelens-cli <PFAD> [--method auto|walk|mft] [--threads N] [--top N] [--quiet]
 //! ```
 
 use std::io::Write;
@@ -18,18 +18,28 @@ struct Args {
     threads: usize,
     top: usize,
     quiet: bool,
+    method: spacelens_win::Method,
 }
 
-const USAGE: &str = "Verwendung: spacelens-cli <PFAD> [--threads N] [--top N] [--quiet]";
+const USAGE: &str = "Verwendung: spacelens-cli <PFAD> [--method auto|walk|mft] [--threads N] [--top N] [--quiet]";
 
 fn parse_args() -> Result<Args, String> {
-    let mut args = Args { root: PathBuf::new(), threads: 0, top: 15, quiet: false };
+    let mut args =
+        Args { root: PathBuf::new(), threads: 0, top: 15, quiet: false, method: spacelens_win::Method::Auto };
     let mut it = std::env::args_os().skip(1);
     while let Some(a) = it.next() {
         match a.to_str() {
             Some("--threads") => args.threads = number(it.next())?,
             Some("--top") => args.top = number(it.next())?,
             Some("--quiet") => args.quiet = true,
+            Some("--method") => {
+                args.method = match it.next().as_ref().and_then(|m| m.to_str()) {
+                    Some("auto") => spacelens_win::Method::Auto,
+                    Some("walk") => spacelens_win::Method::Walk,
+                    Some("mft") => spacelens_win::Method::Mft,
+                    _ => return Err(format!("--method erwartet auto, walk oder mft\n{USAGE}")),
+                }
+            }
             Some("-h" | "--help") => return Err(USAGE.into()),
             _ if args.root.as_os_str().is_empty() => args.root = PathBuf::from(a),
             _ => return Err(format!("Unbekanntes Argument {a:?}\n{USAGE}")),
@@ -58,7 +68,7 @@ fn main() -> ExitCode {
     let backup = elevated && spacelens_win::elevation::enable_backup_privilege();
 
     let progress = Arc::new(ScanProgress::new());
-    let scanner = spacelens_win::scanner_for(&args.root);
+    let scanner = spacelens_win::scanner(args.method);
     let options = ScanOptions { threads: args.threads };
 
     let worker = {
