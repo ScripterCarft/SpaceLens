@@ -70,3 +70,74 @@ export component Chevron inherits Path {
     stroke-width: 1.5px;
     fill: transparent;
 }
+
+// Flat tab of the view strip (text + accent underline when active).
+export component TabButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    height: 36px;
+    min-width: label.preferred-width + 20px;
+    preferred-width: label.preferred-width + 28px;
+    accessible-role: tab;
+    accessible-label: root.text;
+    accessible-item-selected: root.active;
+    accessible-action-default => { root.clicked(); }
+
+    background: area.has-hover && root.enabled ? Theme.hover : transparent;
+    area := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+    label := Text {
+        text: root.text;
+        color: !root.enabled ? Theme.muted.with-alpha(0.5) : root.active ? Palette.foreground : Theme.muted;
+        font-weight: root.active ? 600 : 400;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    Rectangle {
+        x: 8px;
+        y: parent.height - 3px;
+        width: parent.width - 16px;
+        height: 3px;
+        border-radius: 1.5px;
+        background: root.active ? Theme.bar-fill : transparent;
+    }
+}
+
+// One clickable segment of the breadcrumb path.
+export struct Crumb {
+    text: string,
+    id: int,
+}
+
+export component CrumbButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> last;
+    callback clicked;
+
+    height: 26px;
+    min-width: 24px;
+    max-width: 220px;
+    preferred-width: label.preferred-width + 10px;
+    border-radius: 4px;
+    background: area.has-hover ? Theme.hover : transparent;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { root.clicked(); }
+
+    area := TouchArea {
+        clicked => { root.clicked(); }
+    }
+    label := Text {
+        x: 5px;
+        width: parent.width - 10px;
+        text: root.text;
+        font-weight: root.last ? 600 : 400;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}

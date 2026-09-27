@@ -2,7 +2,7 @@
 // Rust side maintains; this component only renders the visible slice.
 
 import { ListView, Palette } from "std-widgets.slint";
-import { Theme, FolderIcon, SizeBar, NavKey, Chevron } from "widgets.slint";
+import { Theme, FolderIcon, NavKey, Chevron } from "widgets.slint";
 
 export struct TreeRow {
     id: int,
@@ -71,6 +71,15 @@ export component DirTree inherits Rectangle {
                 accessible-action-default => { root.select(i); }
                 accessible-action-expand => { root.toggle(i); }
 
+                // Share of the parent as a subtle fill behind the row: shows
+                // proportions without costing a column of width.
+                Rectangle {
+                    x: 0;
+                    width: parent.width * clamp(row.fraction, 0, 1);
+                    height: parent.height;
+                    background: Theme.bar-fill.with-alpha(0.14);
+                }
+
                 area := TouchArea {
                     clicked => {
                         fs.focus();
@@ -110,16 +119,12 @@ export component DirTree inherits Rectangle {
                         overflow: elide;
                         vertical-alignment: center;
                         horizontal-stretch: 1;
-                    }
-
-                    SizeBar {
-                        width: 44px;
-                        fraction: row.fraction;
+                        min-width: 24px;
                     }
 
                     Text {
                         text: row.size;
-                        width: 64px;
+                        width: 62px;
                         color: Theme.muted;
                         horizontal-alignment: right;
                         vertical-alignment: center;

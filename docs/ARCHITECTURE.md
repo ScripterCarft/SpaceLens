@@ -128,6 +128,11 @@ Hardlinks doppelt.
   `row_data` formatiert eine Zeile erst, wenn Slint sie anzeigt.
 - `app.rs` ist der Controller. Er läuft komplett im UI-Thread; der Scan läuft in
   einem eigenen Thread, der Fortschritt wird per 10-Hz-Timer aus Atomics gelesen.
+- **Layout** (`ui/app.slint`): jede Zeile hat eine Aufgabe – Scan-Leiste, Reiter +
+  Suche, Brotkrumen-Pfad + Aktionen, (Filter), Inhalt, Treemap, Statusleiste mit
+  festem Bereich für die Summen. Größen nur über min/preferred/max + Stretch
+  (keine Bindungen an die Fenstergröße → keine Layout-Schleifen); geprüft bei
+  1296×859 und bei der Mindestgröße 900×560.
 - **Treemap** (`core/src/treemap.rs`, `ui/treemap.slint`): Squarified-Layout in
   Rust, gezeichnet direkt in einen RGB-Puffer mit Kissen-Schattierung und als ein
   einziges Bild an Slint übergeben. Beschriftungen, Hover-Rahmen und Legende sind

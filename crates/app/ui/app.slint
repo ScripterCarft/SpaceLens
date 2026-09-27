@@ -1,20 +1,39 @@
-// Main window: toolbar, folder tree | contents table, status bar.
+// Main window.
+//
+// Layout (each row has exactly one job):
+//   menu bar
+//   scan toolbar          – what is scanned
+//   tree | view tabs      – what is shown (+ search box)
+//        | context bar    – where am I (breadcrumb) + actions on the selection
+//        | filter bar     – only while searching
+//        | table / panel
+//        | treemap
+//   status bar            – messages | totals of the current view | scan info | rights
 
 import { Button, ComboBox, LineEdit, Palette, ProgressIndicator } from "std-widgets.slint";
-import { Theme, NavKey } from "widgets.slint";
+import { Theme, NavKey, TabButton, Crumb, CrumbButton } from "widgets.slint";
 import { DirTree, TreeRow } from "tree.slint";
 import { EntryTable, EntryRow } from "table.slint";
 import { TreemapView, TreemapLabel, LegendItem } from "treemap.slint";
 import { CleanupView, CleanupRow } from "cleanup.slint";
 
-export { TreeRow, EntryRow, NavKey, TreemapLabel, LegendItem, CleanupRow }
+export { TreeRow, EntryRow, NavKey, TreemapLabel, LegendItem, CleanupRow, Crumb }
+
+// View tabs (must match `View::tab()` in app.rs).
+export global Tabs {
+    out property <int> folder: 0;
+    out property <int> largest: 1;
+    out property <int> search: 2;
+    out property <int> duplicates: 3;
+    out property <int> cleanup: 4;
+}
 
 export component MainWindow inherits Window {
     title: "SpaceLens";
     preferred-width: 1280px;
     preferred-height: 800px;
     min-width: 900px;
-    min-height: 520px;
+    min-height: 540px;
     background: Palette.background;
 
     // --- scan controls ---
@@ -28,31 +47,42 @@ export component MainWindow inherits Window {
     in property <string> progress-counts;
     in property <string> progress-path;
 
-    // --- results ---
+    // --- views ---
     in property <bool> has-tree;
+    /// Active tab (see `Tabs`).
+    in property <int> tab: 0;
+    /// The cleanup overview replaces the table (its location lists use the table).
+    in property <bool> cleanup-panel;
+
+    // --- navigation / context ---
+    in property <[Crumb]> crumbs;
+    /// Text before the breadcrumb, e.g. "Suche in".
+    in property <string> crumb-prefix;
+    in property <bool> can-go-up;
+    /// Totals of the current view, shown in the status bar.
+    in property <string> location-info;
+
+    // --- table ---
     in property <[TreeRow]> tree-rows;
     in property <int> tree-selected: -1;
     in property <[EntryRow]> entries;
     in property <int> entry-selected: -1;
     in property <int> sort-column: 1;
     in property <bool> sort-descending: true;
-    in property <string> location;
-    in property <string> location-info;
-    in property <bool> can-go-up;
-    in property <bool> view-largest;
-    in property <bool> view-cleanup;
-    in property <bool> view-list;
-    in property <bool> view-search;
+    in property <bool> deleting;
+
+    // --- search ---
     in-out property <string> search-text;
     in property <string> search-summary;
     in-out property <int> filter-type: 0;
     in-out property <int> filter-size: 0;
     in-out property <int> filter-age: 0;
+
+    // --- cleanup ---
     in property <[CleanupRow]> cleanup-rows;
     in property <string> bin-text;
     in property <bool> bin-empty: true;
     in property <string> cleanup-hint;
-    in property <bool> deleting;
 
     // --- treemap ---
     in-out property <bool> treemap-visible: true;
@@ -78,6 +108,7 @@ export component MainWindow inherits Window {
     callback elevate();
     callback refresh-drives();
     callback go-up();
+    callback crumb-clicked(id: int);
     callback reveal-current();
     callback tree-toggle(row: int);
     callback tree-select(row: int);
@@ -116,8 +147,15 @@ export component MainWindow inherits Window {
         search-box.select-all();
     }
 
-    property <length> tree-width: 340px;
-    property <length> treemap-height: 300px;
+    function start-search() {
+        root.focus-search();
+        root.search-changed(root.search-text);
+    }
+
+    // User-chosen sizes (splitters). The layout shrinks the panes towards
+    // their minimum sizes when the window gets smaller.
+    property <length> tree-width: 320px;
+    property <length> treemap-height: 280px;
 
     MenuBar {
         Menu {
@@ -149,16 +187,20 @@ export component MainWindow inherits Window {
             }
         }
         Menu {
-            title: "Navigation";
+            title: "Bearbeiten";
             MenuItem {
-                title: "Suchen …";
-                shortcut: @keys(Control + F);
-                enabled: root.has-tree;
-                activated => {
-                    root.focus-search();
-                    root.search-changed(root.search-text);
-                }
+                title: "In den Papierkorb verschieben …  (Entf)";
+                enabled: root.has-tree && root.entry-selected >= 0 && !root.deleting;
+                activated => { root.delete-selected(); }
             }
+            MenuItem {
+                title: "Im Explorer anzeigen";
+                enabled: root.has-tree;
+                activated => { root.reveal-current(); }
+            }
+        }
+        Menu {
+            title: "Ansicht";
             MenuItem {
                 title: "Ordnerinhalt";
                 enabled: root.has-tree;
@@ -168,6 +210,12 @@ export component MainWindow inherits Window {
                 title: "Größte Dateien";
                 enabled: root.has-tree;
                 activated => { root.show-largest(); }
+            }
+            MenuItem {
+                title: "Suchen …";
+                shortcut: @keys(Control + F);
+                enabled: root.has-tree;
+                activated => { root.start-search(); }
             }
             MenuItem {
                 title: "Aufräumen";
@@ -180,22 +228,6 @@ export component MainWindow inherits Window {
                 enabled: root.can-go-up;
                 activated => { root.go-up(); }
             }
-            MenuItem {
-                title: "Im Explorer anzeigen";
-                enabled: root.has-tree;
-                activated => { root.reveal-current(); }
-            }
-        }
-        Menu {
-            title: "Bearbeiten";
-            MenuItem {
-                title: "In den Papierkorb verschieben …  (Entf)";
-                enabled: root.has-tree && root.entry-selected >= 0 && !root.deleting;
-                activated => { root.delete-selected(); }
-            }
-        }
-        Menu {
-            title: "Ansicht";
             MenuItem {
                 title: root.treemap-visible ? "Treemap ausblenden" : "Treemap einblenden";
                 activated => { root.treemap-visible = !root.treemap-visible; }
@@ -211,7 +243,7 @@ export component MainWindow inherits Window {
     }
 
     VerticalLayout {
-        // ---------------------------------------------------------- toolbar
+        // ------------------------------------------------ scan toolbar
         Rectangle {
             background: Palette.alternate-background;
             HorizontalLayout {
@@ -219,7 +251,11 @@ export component MainWindow inherits Window {
                 spacing: 8px;
 
                 ComboBox {
-                    width: 360px;
+                    // Shares the row with the path field; shrinks on narrow windows.
+                    min-width: 200px;
+                    preferred-width: 360px;
+                    max-width: 360px;
+                    horizontal-stretch: 0.4;
                     model: root.drives;
                     current-index <=> root.drive-index;
                     enabled: !root.scanning;
@@ -228,6 +264,7 @@ export component MainWindow inherits Window {
 
                 LineEdit {
                     horizontal-stretch: 1;
+                    min-width: 120px;
                     text <=> root.scan-path;
                     placeholder-text: "Pfad, z. B. C:\\ oder D:\\Daten";
                     enabled: !root.scanning;
@@ -260,13 +297,18 @@ export component MainWindow inherits Window {
             background: Theme.divider;
         }
 
-        // ---------------------------------------------------------- content
+        // ------------------------------------------------ content
         Rectangle {
             vertical-stretch: 1;
 
             HorizontalLayout {
+                // Stretch > 0 so the layout may shrink it (a stretch of 0
+                // never shrinks); max-width caps it at the user's width.
                 tree := DirTree {
-                    width: root.tree-width;
+                    min-width: 190px;
+                    preferred-width: root.tree-width;
+                    max-width: root.tree-width;
+                    horizontal-stretch: 1;
                     rows: root.tree-rows;
                     selected: root.tree-selected;
                     toggle(row) => { root.tree-toggle(row); }
@@ -274,14 +316,14 @@ export component MainWindow inherits Window {
                     navigate(key) => { root.tree-navigate(key); }
                 }
 
-                // Draggable splitter.
+                // Splitter tree | right pane.
                 Rectangle {
                     width: 5px;
-                    background: splitter.has-hover || splitter.pressed ? Theme.bar-fill.with-alpha(0.4) : Theme.divider;
-                    splitter := TouchArea {
+                    background: vsplit.has-hover || vsplit.pressed ? Theme.bar-fill.with-alpha(0.4) : Theme.divider;
+                    vsplit := TouchArea {
                         mouse-cursor: col-resize;
                         moved => {
-                            root.tree-width = clamp(root.tree-width + self.mouse-x - self.pressed-x, 200px, root.width - 480px);
+                            root.tree-width = clamp(tree.width + self.mouse-x - self.pressed-x, 190px, root.width * 0.5);
                         }
                     }
                 }
@@ -289,68 +331,118 @@ export component MainWindow inherits Window {
                 VerticalLayout {
                     horizontal-stretch: 1;
 
-                    // Location bar.
+                    // View tabs + search.
                     Rectangle {
                         HorizontalLayout {
-                            padding: 6px;
-                            padding-left: 8px;
-                            spacing: 8px;
+                            padding-left: 4px;
+                            padding-right: 8px;
+                            spacing: 0px;
+
+                            TabButton {
+                                text: "Ordnerinhalt";
+                                active: root.tab == Tabs.folder;
+                                enabled: root.has-tree;
+                                clicked => { root.show-folder-view(); }
+                            }
+                            TabButton {
+                                text: "Größte Dateien";
+                                active: root.tab == Tabs.largest;
+                                enabled: root.has-tree;
+                                clicked => { root.show-largest(); }
+                            }
+                            TabButton {
+                                text: "Suche";
+                                active: root.tab == Tabs.search;
+                                enabled: root.has-tree;
+                                clicked => { root.start-search(); }
+                            }
+                            TabButton {
+                                text: "Aufräumen";
+                                active: root.tab == Tabs.cleanup;
+                                enabled: root.has-tree;
+                                clicked => { root.show-cleanup(); }
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                min-width: 8px;
+                            }
+
+                            VerticalLayout {
+                                alignment: center;
+                                search-box := LineEdit {
+                                    min-width: 150px;
+                                    preferred-width: 280px;
+                                    max-width: 340px;
+                                    placeholder-text: "Suchen … (Strg+F)";
+                                    text <=> root.search-text;
+                                    enabled: root.has-tree;
+                                    edited(text) => { root.search-changed(text); }
+                                    accepted(text) => { root.search-changed(text); }
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        height: 1px;
+                        background: Theme.divider;
+                    }
+
+                    // Context bar: breadcrumb + actions on the selection.
+                    Rectangle {
+                        HorizontalLayout {
+                            padding-top: 4px;
+                            padding-bottom: 4px;
+                            padding-left: 6px;
+                            padding-right: 8px;
+                            spacing: 6px;
 
                             Button {
                                 text: "↑";
-                                width: 36px;
+                                width: 34px;
                                 enabled: root.can-go-up;
                                 clicked => { root.go-up(); }
                             }
 
-                            Button {
-                                text: "Ordnerinhalt";
-                                primary: !root.view-largest && !root.view-cleanup && !root.view-list && !root.view-search;
-                                clicked => { root.show-folder-view(); }
+                            if root.crumb-prefix != "": Text {
+                                text: root.crumb-prefix;
+                                color: Theme.muted;
+                                vertical-alignment: center;
                             }
 
-                            Button {
-                                text: "Größte Dateien";
-                                primary: root.view-largest;
-                                clicked => { root.show-largest(); }
-                            }
-
-                            Button {
-                                text: "Aufräumen";
-                                primary: root.view-cleanup;
-                                clicked => { root.show-cleanup(); }
-                            }
-
-                            VerticalLayout {
+                            // Breadcrumb: may shrink to nothing; segments elide.
+                            Rectangle {
                                 horizontal-stretch: 1;
-                                alignment: center;
-                                Text {
-                                    text: root.location;
-                                    font-weight: 600;
-                                    overflow: elide;
-                                }
-                                Text {
-                                    text: root.location-info;
-                                    color: Theme.muted;
-                                    overflow: elide;
+                                min-width: 0px;
+                                clip: true;
+                                HorizontalLayout {
+                                    alignment: start;
+                                    spacing: 0px;
+                                    for crumb[i] in root.crumbs: HorizontalLayout {
+                                        spacing: 0px;
+                                        if i > 0: Text {
+                                            text: "›";
+                                            color: Theme.muted;
+                                            vertical-alignment: center;
+                                            width: 12px;
+                                            horizontal-alignment: center;
+                                        }
+                                        CrumbButton {
+                                            text: crumb.text;
+                                            last: i == root.crumbs.length - 1;
+                                            clicked => { root.crumb-clicked(crumb.id); }
+                                        }
+                                    }
                                 }
                             }
 
-                            search-box := LineEdit {
-                                width: 220px;
-                                placeholder-text: "Suchen … (Strg+F)";
-                                text <=> root.search-text;
+                            if !root.cleanup-panel: Button {
+                                text: "Im Explorer";
                                 enabled: root.has-tree;
-                                edited(text) => { root.search-changed(text); }
-                                accepted(text) => { root.search-changed(text); }
-                            }
-
-                            if !root.view-cleanup: Button {
-                                text: "Im Explorer anzeigen";
                                 clicked => { root.reveal-current(); }
                             }
-
-                            if !root.view-cleanup: Button {
+                            if !root.cleanup-panel: Button {
                                 text: "In den Papierkorb …";
                                 enabled: root.entry-selected >= 0 && !root.deleting && !root.scanning;
                                 clicked => { root.delete-selected(); }
@@ -359,31 +451,26 @@ export component MainWindow inherits Window {
                     }
 
                     // Filters, only while searching.
-                    if root.view-search: Rectangle {
+                    if root.tab == Tabs.search: Rectangle {
                         background: Palette.alternate-background;
                         HorizontalLayout {
                             padding: 6px;
                             padding-left: 8px;
                             spacing: 8px;
-                            Text {
-                                text: "Filter:";
-                                vertical-alignment: center;
-                                color: Theme.muted;
-                            }
                             ComboBox {
-                                width: 190px;
+                                width: 170px;
                                 model: ["Alle Typen", "Videos", "Musik & Audio", "Bilder", "Archive", "Disk-Images & VMs", "Programme", "Dokumente", "Code & Daten", "System", "Sonstiges", "Nur Ordner"];
                                 current-index <=> root.filter-type;
                                 selected => { root.filters-changed(); }
                             }
                             ComboBox {
-                                width: 150px;
+                                width: 160px;
                                 model: ["Jede Größe", "größer als 1 MB", "größer als 10 MB", "größer als 100 MB", "größer als 1 GB", "größer als 10 GB"];
                                 current-index <=> root.filter-size;
                                 selected => { root.filters-changed(); }
                             }
                             ComboBox {
-                                width: 190px;
+                                width: 170px;
                                 model: ["Jedes Alter", "älter als 30 Tage", "älter als 6 Monate", "älter als 1 Jahr", "älter als 2 Jahre", "älter als 5 Jahre"];
                                 current-index <=> root.filter-age;
                                 selected => { root.filters-changed(); }
@@ -393,6 +480,7 @@ export component MainWindow inherits Window {
                                 color: Theme.muted;
                                 vertical-alignment: center;
                                 horizontal-stretch: 1;
+                                min-width: 0px;
                                 overflow: elide;
                             }
                             Button {
@@ -407,15 +495,16 @@ export component MainWindow inherits Window {
                         background: Theme.divider;
                     }
 
-                    // Table and cleanup view share this area; the table stays
+                    // Table and cleanup panel share this area; the table stays
                     // instantiated so its state (scroll, focus) survives.
                     Rectangle {
                         vertical-stretch: 1;
+                        min-height: 170px;
 
                         table := EntryTable {
                             width: parent.width;
                             height: parent.height;
-                            visible: !root.view-cleanup;
+                            visible: !root.cleanup-panel;
                             rows: root.entries;
                             selected: root.entry-selected;
                             sort-column: root.sort-column;
@@ -429,7 +518,7 @@ export component MainWindow inherits Window {
                             navigate(key, shift) => { root.entry-navigate(key, shift); }
                         }
 
-                        if root.view-cleanup: CleanupView {
+                        if root.cleanup-panel: CleanupView {
                             width: parent.width;
                             height: parent.height;
                             rows: root.cleanup-rows;
@@ -443,20 +532,24 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    // Draggable splitter between table and treemap.
+                    // Splitter table | treemap.
                     if root.treemap-visible: Rectangle {
                         height: 5px;
                         background: hsplit.has-hover || hsplit.pressed ? Theme.bar-fill.with-alpha(0.4) : Theme.divider;
                         hsplit := TouchArea {
                             mouse-cursor: row-resize;
                             moved => {
-                                root.treemap-height = clamp(root.treemap-height - (self.mouse-y - self.pressed-y), 120px, root.height - 320px);
+                                root.treemap-height = clamp(root.treemap-height - (self.mouse-y - self.pressed-y), 100px, root.height * 0.6);
                             }
                         }
                     }
 
                     if root.treemap-visible: TreemapView {
-                        height: root.treemap-height;
+                        // Gives way to the table (min 120px) on short windows.
+                        min-height: 90px;
+                        preferred-height: root.treemap-height;
+                        max-height: root.treemap-height;
+                        vertical-stretch: 1;
                         image: root.treemap-image;
                         labels: root.treemap-labels;
                         legend: root.treemap-legend;
@@ -503,6 +596,7 @@ export component MainWindow inherits Window {
                         text: "Hinweis: Ohne Administratorrechte fehlen geschützte Ordner (z. B. andere Benutzerprofile).";
                         color: Theme.muted;
                         horizontal-alignment: center;
+                        wrap: word-wrap;
                     }
                 }
             }
@@ -513,36 +607,61 @@ export component MainWindow inherits Window {
             background: Theme.divider;
         }
 
-        // ------------------------------------------------------- status bar
+        // ------------------------------------------------ status bar
         Rectangle {
             height: 26px;
             background: Palette.alternate-background;
             HorizontalLayout {
                 padding-left: 8px;
                 padding-right: 8px;
-                spacing: 12px;
+                spacing: 10px;
 
                 if root.scanning: VerticalLayout {
                     alignment: center;
                     ProgressIndicator {
-                        width: 120px;
+                        width: 100px;
                         height: 4px;
                         indeterminate: true;
                     }
                 }
+                // Messages, hover and selection details.
                 Text {
                     text: root.status;
                     vertical-alignment: center;
                     overflow: elide;
                     horizontal-stretch: 1;
+                    min-width: 0px;
+                }
+                // Totals of the current view – always visible.
+                if root.location-info != "": HorizontalLayout {
+                    spacing: 10px;
+                    Rectangle {
+                        width: 1px;
+                        background: Theme.divider;
+                    }
+                    // The totals win over the message: they only elide beyond 520px.
+                    Text {
+                        text: root.location-info;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        min-width: min(self.preferred-width, 520px);
+                        max-width: 520px;
+                    }
+                }
+                Rectangle {
+                    width: 1px;
+                    background: Theme.divider;
                 }
                 Text {
                     text: root.scan-info;
                     color: Theme.muted;
                     vertical-alignment: center;
+                    overflow: elide;
+                    min-width: 40px;
+                    max-width: 300px;
                 }
                 Text {
-                    text: root.elevated ? "Administrator" : "Standardbenutzer";
+                    text: root.elevated ? "Admin" : "Standard";
                     color: root.elevated ? Palette.accent-background : Theme.muted;
                     vertical-alignment: center;
                 }

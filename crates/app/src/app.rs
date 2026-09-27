@@ -29,7 +29,7 @@ use spacelens_win::volumes::{self, Volume};
 use spacelens_win::{scanner_for, shell};
 
 use crate::models::{COL_NAME, EntryModel, TreeModel, sort_for_column};
-use crate::{CleanupRow, LegendItem, MainWindow, NavKey, TreemapLabel};
+use crate::{CleanupRow, Crumb, LegendItem, MainWindow, NavKey, TreemapLabel};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// Resizing re-renders the treemap once the size has been stable this long.
@@ -68,6 +68,18 @@ enum View {
     Locations(&'static str),
     /// Search results below the current directory.
     Search,
+}
+
+impl View {
+    /// Index of the tab that represents this view (see `Tabs` in app.slint).
+    fn tab(self) -> i32 {
+        match self {
+            View::Folder => 0,
+            View::Largest => 1,
+            View::Search => 2,
+            View::Cleanup | View::Locations(_) => 4,
+        }
+    }
 }
 
 /// Items being moved to the recycle bin on a worker thread.
@@ -169,6 +181,7 @@ impl App {
         bind!(&app, ui, on_elevate => elevate());
         bind!(&app, ui, on_refresh_drives => refresh_drives());
         bind!(&app, ui, on_go_up => go_up());
+        bind!(&app, ui, on_crumb_clicked => crumb_clicked(id));
         bind!(&app, ui, on_reveal_current => reveal_current());
         bind!(&app, ui, on_tree_toggle => tree_toggle(row));
         bind!(&app, ui, on_tree_select => tree_select(row));
@@ -446,67 +459,78 @@ impl App {
         self.render_treemap();
     }
 
-    /// Header above the table (path + totals) for the current view.
+    /// Context bar (breadcrumb, prefix) and the totals in the status bar for
+    /// the current view.
     fn update_location(&self, tree: &Tree) {
         let Some(ui) = self.ui() else { return };
-        if self.state.borrow().view == View::Cleanup {
-            return; // header belongs to the cleanup view
-        }
         let (dir, view) = {
             let st = self.state.borrow();
             (st.current, st.view)
         };
-        let largest = view == View::Largest;
-        let n = tree.node(dir);
-        let (files, dirs) = tree.counts(dir);
         ui.set_can_go_up(view != View::Folder || tree.parent(dir).is_some());
-        if view == View::Search {
-            let (matches, size) = self.search_summary.get();
-            let shown = self.entry_model.len() as u64;
-            ui.set_location(format!("Suche in {}", tree.path(dir)).into());
-            ui.set_location_info("Doppelklick springt zum Ordner".into());
-            let mut summary = format!("{} Treffer  ·  zusammen {}", format::count(matches), format::bytes(size));
-            if shown < matches {
-                summary.push_str(&format!("  ·  die {} größten angezeigt", format::count(shown)));
-            }
-            ui.set_search_summary(summary.into());
-            return;
-        }
-        if let View::Locations(title) = view {
-            let total: u64 = (0..self.entry_model.len())
-                .filter_map(|r| self.entry_model.id_at(r))
-                .map(|id| tree.node(id).size)
-                .sum();
-            ui.set_location(format!("{title} – {} Orte", self.entry_model.len()).into());
-            ui.set_location_info(
-                format!("Zusammen {}  ·  Doppelklick öffnet den Ordner  ·  ↑ zurück", format::bytes(total)).into(),
-            );
-            return;
-        }
-        if largest {
-            ui.set_location(format!("Größte Dateien in {}", tree.path(dir)).into());
-            ui.set_location_info(
-                format!(
-                    "Die {} größten von {} Dateien  ·  Doppelklick springt zum Ordner der Datei",
-                    format::count(self.entry_model.len() as u64),
-                    format::count(u64::from(files))
+
+        let (prefix, show_crumbs, info) = match view {
+            View::Cleanup => (
+                "Bekannte Bereiche mit entbehrlichen Daten – alles landet im Papierkorb".to_string(),
+                false,
+                String::new(),
+            ),
+            View::Locations(title) => {
+                let total: u64 = (0..self.entry_model.len())
+                    .filter_map(|r| self.entry_model.id_at(r))
+                    .map(|id| tree.node(id).size)
+                    .sum();
+                (
+                    format!("{title} – {} Orte", self.entry_model.len()),
+                    false,
+                    format!("Zusammen {}", format::bytes(total)),
                 )
-                .into(),
-            );
-            return;
+            }
+            View::Search => {
+                let (matches, size) = self.search_summary.get();
+                let shown = self.entry_model.len() as u64;
+                let mut summary = format!("{} Treffer  ·  zusammen {}", format::count(matches), format::bytes(size));
+                if shown < matches {
+                    summary.push_str(&format!("  ·  die {} größten angezeigt", format::count(shown)));
+                }
+                ui.set_search_summary(summary.clone().into());
+                ("Suche in".to_string(), true, summary)
+            }
+            View::Largest => (
+                "Größte Dateien in".to_string(),
+                true,
+                format!(
+                    "Die {} größten von {} Dateien",
+                    format::count(self.entry_model.len() as u64),
+                    format::count(u64::from(tree.counts(dir).0))
+                ),
+            ),
+            View::Folder => {
+                let n = tree.node(dir);
+                let (files, dirs) = tree.counts(dir);
+                (
+                    String::new(),
+                    true,
+                    format!(
+                        "{} (belegt {})  ·  {} Dateien  ·  {} Ordner",
+                        format::bytes(n.size),
+                        format::bytes(n.alloc),
+                        format::count(u64::from(files)),
+                        format::count(u64::from(dirs))
+                    ),
+                )
+            }
+        };
+        ui.set_crumb_prefix(prefix.into());
+        ui.set_location_info(info.into());
+        let crumbs = if show_crumbs { breadcrumb(tree, dir) } else { Vec::new() };
+        ui.set_crumbs(ModelRc::new(VecModel::from(crumbs)));
+    }
+
+    fn crumb_clicked(&self, id: i32) {
+        if let Ok(id) = NodeId::try_from(id) {
+            self.navigate_to(id, None);
         }
-        ui.set_location(tree.path(dir).into());
-        ui.set_location_info(
-            format!(
-                "{} (belegt {})  ·  {} Dateien  ·  {} Ordner  ·  {} Einträge hier",
-                format::bytes(n.size),
-                format::bytes(n.alloc),
-                format::count(u64::from(files)),
-                format::count(u64::from(dirs)),
-                format::count(self.entry_model.len() as u64)
-            )
-            .into(),
-        );
     }
 
     /// Number of entries listed in the "largest files" view.
@@ -522,8 +546,8 @@ impl App {
         let ids = query::largest_files(&tree, dir, Self::LARGEST_COUNT);
         self.entry_model.show_list(ids, dir, sort_for_column(column, descending));
         if let Some(ui) = self.ui() {
-            ui.set_view_largest(true);
-            ui.set_view_cleanup(false);
+            ui.set_tab(View::Largest.tab());
+            ui.set_cleanup_panel(false);
             ui.set_entry_selected(-1);
             ui.invoke_focus_table();
         }
@@ -1092,10 +1116,8 @@ impl App {
     fn sync_view_flags(&self) {
         let view = self.state.borrow().view;
         if let Some(ui) = self.ui() {
-            ui.set_view_largest(view == View::Largest);
-            ui.set_view_cleanup(view == View::Cleanup);
-            ui.set_view_list(matches!(view, View::Locations(_)));
-            ui.set_view_search(view == View::Search);
+            ui.set_tab(view.tab());
+            ui.set_cleanup_panel(view == View::Cleanup);
         }
     }
 
@@ -1106,10 +1128,8 @@ impl App {
         self.state.borrow_mut().view = View::Cleanup;
         self.sync_view_flags();
         self.refresh_cleanup();
-        if let Some(ui) = self.ui() {
-            ui.set_location("Aufräumen".into());
-            ui.set_location_info("Bekannte Bereiche mit entbehrlichen Daten – alles landet im Papierkorb".into());
-            ui.set_can_go_up(true);
+        if let Some(tree) = self.state.borrow().tree.clone() {
+            self.update_location(&tree);
         }
     }
 
@@ -1506,4 +1526,26 @@ fn legend(tree: &Tree, dir: NodeId) -> Vec<LegendItem> {
             }
         })
         .collect()
+}
+
+/// Breadcrumb segments from the scan root to `dir`. Deep paths keep the root
+/// and the last levels, with "…" (pointing to the hidden ancestor) between.
+fn breadcrumb(tree: &Tree, dir: NodeId) -> Vec<Crumb> {
+    const KEEP_LAST: usize = 4;
+    let chain = tree.ancestry(dir);
+    let crumb = |id: NodeId| Crumb {
+        text: if id == Tree::ROOT {
+            tree.root_path().trim_end_matches('\\').into()
+        } else {
+            tree.name(id).as_ref().into()
+        },
+        id: id as i32,
+    };
+    if chain.len() <= KEEP_LAST + 2 {
+        return chain.into_iter().map(crumb).collect();
+    }
+    let hidden = chain[chain.len() - KEEP_LAST - 1];
+    let mut out = vec![crumb(chain[0]), Crumb { text: "…".into(), id: hidden as i32 }];
+    out.extend(chain[chain.len() - KEEP_LAST..].iter().map(|&id| crumb(id)));
+    out
 }
