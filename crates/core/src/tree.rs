@@ -296,3 +296,34 @@ impl Tree {
         Some(removed)
     }
 }
+
+impl Tree {
+    /// Finds a node by absolute display path (case-insensitive like Windows),
+    /// e.g. `C:\Users\Joe\AppData\Local\Temp`. Cost: one pass over the
+    /// children of each directory on the way.
+    pub fn find_path(&self, path: &str) -> Option<NodeId> {
+        const SEP: char = '\\';
+        let path = path.strip_prefix(r"\\?\").unwrap_or(path).trim_end_matches(SEP);
+        let root = self.root_path.trim_end_matches(SEP);
+        if path.len() < root.len() || !path.is_char_boundary(root.len()) {
+            return None;
+        }
+        let (head, rest) = path.split_at(root.len());
+        if !names_equal(head, root) {
+            return None;
+        }
+        if !rest.is_empty() && !rest.starts_with(SEP) {
+            return None; // "C:\Users2" must not match root "C:\Users"
+        }
+        let mut cur = Self::ROOT;
+        for part in rest.split(SEP).filter(|p| !p.is_empty()) {
+            cur = self.live_children(cur).find(|&c| names_equal(&self.name(c), part))?;
+        }
+        Some(cur)
+    }
+}
+
+/// Case-insensitive name comparison (ASCII fast path, Unicode fallback).
+pub fn names_equal(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b) || (!a.is_ascii() && a.to_lowercase() == b.to_lowercase())
+}

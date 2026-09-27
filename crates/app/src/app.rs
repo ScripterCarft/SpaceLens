@@ -16,17 +16,19 @@ use std::time::{Duration, Instant};
 use slint::{
     Color, ComponentHandle, Image, ModelRc, Rgb8Pixel, SharedPixelBuffer, SharedString, Timer, TimerMode, VecModel,
 };
+use spacelens_core::cleanup::{self, Finding, Level};
 use spacelens_core::filetype::{self, Category};
 use spacelens_core::safety::{self, Guard};
 use spacelens_core::treemap::{Tile, Treemap};
 use spacelens_core::{NodeId, ScanError, ScanOptions, ScanOutcome, ScanProgress, Tree, flags, format, query};
 use spacelens_win::elevation::{self, RelaunchError};
+use spacelens_win::known;
 use spacelens_win::recycle::{self, RecycleReport};
 use spacelens_win::volumes::{self, Volume};
 use spacelens_win::{scanner_for, shell};
 
 use crate::models::{COL_NAME, EntryModel, TreeModel, sort_for_column};
-use crate::{LegendItem, MainWindow, NavKey, TreemapLabel};
+use crate::{CleanupRow, LegendItem, MainWindow, NavKey, TreemapLabel};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// Resizing re-renders the treemap once the size has been stable this long.
@@ -52,20 +54,32 @@ struct ScanJob {
     started: Instant,
 }
 
+/// What the area above the treemap shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum View {
+    /// Children of the current directory.
+    Folder,
+    /// Largest files below the current directory.
+    Largest,
+    /// Known junk locations.
+    Cleanup,
+}
+
 /// Items being moved to the recycle bin on a worker thread.
 struct DeleteJob {
     handle: JoinHandle<Result<RecycleReport, String>>,
     items: Vec<(NodeId, String)>,
     /// Table row to select afterwards (keeps the position for quick successive deletes).
     row: i32,
+    /// Set for cleanup-view jobs (bulk, errors skipped silently).
+    cleanup: Option<&'static str>,
 }
 
 struct State {
     tree: Option<Arc<Tree>>,
     job: Option<ScanJob>,
     delete_job: Option<DeleteJob>,
-    /// Table shows "largest files" of `current` instead of its children.
-    view_largest: bool,
+    view: View,
     volumes: Vec<Volume>,
     /// Directory shown in the contents table.
     current: NodeId,
@@ -81,6 +95,8 @@ pub struct App {
     treemap: RefCell<TreemapState>,
     treemap_timer: Timer,
     delete_timer: Timer,
+    /// Result of the last cleanup evaluation (indices match the view rows).
+    findings: RefCell<Vec<Finding>>,
     elevated: bool,
     state: RefCell<State>,
 }
@@ -108,12 +124,13 @@ impl App {
             treemap: RefCell::new(TreemapState::default()),
             treemap_timer: Timer::default(),
             delete_timer: Timer::default(),
+            findings: RefCell::new(Vec::new()),
             elevated,
             state: RefCell::new(State {
                 tree: None,
                 job: None,
                 delete_job: None,
-                view_largest: false,
+                view: View::Folder,
                 volumes: Vec::new(),
                 current: Tree::ROOT,
                 sort_column: 1,
@@ -147,6 +164,10 @@ impl App {
         bind!(&app, ui, on_delete_selected => delete_selected());
         bind!(&app, ui, on_show_folder_view => show_folder_view());
         bind!(&app, ui, on_show_largest => show_largest());
+        bind!(&app, ui, on_show_cleanup => show_cleanup());
+        bind!(&app, ui, on_cleanup_show => cleanup_show(index));
+        bind!(&app, ui, on_cleanup_clean => cleanup_clean(index));
+        bind!(&app, ui, on_empty_bin => empty_bin());
         bind!(&app, ui, on_entry_navigate => entry_navigate(key));
         bind!(&app, ui, on_sort_by => sort_by(column));
         bind!(&app, ui, on_show_about => show_about());
@@ -376,7 +397,7 @@ impl App {
         let (column, descending) = {
             let mut st = self.state.borrow_mut();
             st.current = dir;
-            st.view_largest = false;
+            st.view = View::Folder;
             (st.sort_column, st.sort_descending)
         };
         self.entry_model.show(dir, sort_for_column(column, descending));
@@ -387,7 +408,7 @@ impl App {
         ui.set_sort_descending(descending);
         ui.set_tree_selected(tree_row.map_or(-1, |r| r as i32));
         ui.set_entry_selected(select.and_then(|id| self.entry_model.row_of(id)).map_or(-1, |r| r as i32));
-        ui.set_view_largest(false);
+        self.sync_view_flags();
         self.update_location(&tree);
         self.render_treemap();
     }
@@ -395,9 +416,12 @@ impl App {
     /// Header above the table (path + totals) for the current view.
     fn update_location(&self, tree: &Tree) {
         let Some(ui) = self.ui() else { return };
+        if self.state.borrow().view == View::Cleanup {
+            return; // header belongs to the cleanup view
+        }
         let (dir, largest) = {
             let st = self.state.borrow();
-            (st.current, st.view_largest)
+            (st.current, st.view == View::Largest)
         };
         let n = tree.node(dir);
         let (files, dirs) = tree.counts(dir);
@@ -434,7 +458,7 @@ impl App {
     fn show_largest(&self) {
         let (tree, dir, column, descending) = {
             let mut st = self.state.borrow_mut();
-            st.view_largest = true;
+            st.view = View::Largest;
             (st.tree.clone(), st.current, st.sort_column, st.sort_descending)
         };
         let Some(tree) = tree else { return };
@@ -442,6 +466,7 @@ impl App {
         self.entry_model.show_list(ids, dir, sort_for_column(column, descending));
         if let Some(ui) = self.ui() {
             ui.set_view_largest(true);
+            ui.set_view_cleanup(false);
             ui.set_entry_selected(-1);
             ui.invoke_focus_table();
         }
@@ -454,7 +479,7 @@ impl App {
     }
 
     fn go_up(&self) {
-        if self.state.borrow().view_largest {
+        if self.state.borrow().view != View::Folder {
             return self.show_folder_view();
         }
         let (tree, current) = {
@@ -556,7 +581,7 @@ impl App {
         let n = tree.node(id);
         if n.is_dir() && !n.has(flags::NOT_FOLLOWED) {
             self.navigate_to(id, None);
-        } else if self.state.borrow().view_largest {
+        } else if self.state.borrow().view == View::Largest {
             // From the list, jump to the file in its folder.
             if let Some(parent) = tree.parent(id) {
                 self.navigate_to(parent, Some(id));
@@ -700,25 +725,7 @@ impl App {
             return;
         }
 
-        let items = vec![(id, path)];
-        let paths: Vec<String> = items.iter().map(|(_, p)| p.clone()).collect();
-        let spawned = std::thread::Builder::new().name("recycle".into()).spawn(move || recycle::recycle(&paths, owner));
-        let handle = match spawned {
-            Ok(h) => h,
-            Err(e) => return self.set_status(format!("Löschen konnte nicht gestartet werden: {e}")),
-        };
-        self.state.borrow_mut().delete_job = Some(DeleteJob { handle, items, row });
-        if let Some(ui) = self.ui() {
-            ui.set_deleting(true);
-        }
-        self.set_status("Wird in den Papierkorb verschoben …");
-
-        let weak = Rc::downgrade(self);
-        self.delete_timer.start(TimerMode::Repeated, POLL_INTERVAL, move || {
-            if let Some(app) = weak.upgrade() {
-                app.poll_delete();
-            }
-        });
+        self.start_delete_job(vec![(id, path)], row, None, false);
     }
 
     fn poll_delete(&self) {
@@ -750,11 +757,23 @@ impl App {
             return;
         }
         let removed = self.apply_removals(&gone);
+        if let Some(title) = job.cleanup {
+            let skipped = job.items.len() - gone.len();
+            let mut msg = format!("{title}: {} in den Papierkorb verschoben", format::bytes(removed.alloc));
+            if skipped > 0 {
+                msg.push_str(&format!("  ·  {} übersprungen (in Verwendung)", format::count(skipped as u64)));
+            }
+            msg.push_str("  ·  Papierkorb leeren, um den Platz freizugeben");
+            self.set_status(msg);
+            self.refresh_cleanup();
+            return;
+        }
         let name = job.items.first().map_or_else(String::new, |(_, p)| p.clone());
         self.set_status(format!(
             "In den Papierkorb verschoben: {name}  ·  {} – der Platz wird frei, sobald der Papierkorb geleert wird",
             format::bytes(removed.alloc)
         ));
+        self.refresh_bin_info();
         if let Some(ui) = self.ui() {
             let len = self.entry_model.len() as i32;
             ui.set_entry_selected(if len == 0 { -1 } else { job.row.min(len - 1) });
@@ -798,6 +817,193 @@ impl App {
         match handle.window_handle().ok()?.as_raw() {
             RawWindowHandle::Win32(h) => Some(h.hwnd.get()),
             _ => None,
+        }
+    }
+
+    // ---------------------------------------------------------- cleanup
+
+    /// Mirrors the current view into the UI's toggle flags.
+    fn sync_view_flags(&self) {
+        let view = self.state.borrow().view;
+        if let Some(ui) = self.ui() {
+            ui.set_view_largest(view == View::Largest);
+            ui.set_view_cleanup(view == View::Cleanup);
+        }
+    }
+
+    fn show_cleanup(&self) {
+        if self.state.borrow().tree.is_none() {
+            return;
+        }
+        self.state.borrow_mut().view = View::Cleanup;
+        self.sync_view_flags();
+        self.refresh_cleanup();
+        if let Some(ui) = self.ui() {
+            ui.set_location("Aufräumen".into());
+            ui.set_location_info("Bekannte Bereiche mit entbehrlichen Daten – alles landet im Papierkorb".into());
+            ui.set_can_go_up(true);
+        }
+    }
+
+    /// Re-evaluates the catalogue against the (possibly changed) tree. Pure
+    /// in-memory work: a few path lookups, no disk access.
+    fn refresh_cleanup(&self) {
+        let Some(tree) = self.state.borrow().tree.clone() else { return };
+        let findings = cleanup::evaluate(&tree, known::resolve);
+        let rows: Vec<CleanupRow> = findings
+            .iter()
+            .map(|f| CleanupRow {
+                title: f.rule.title.into(),
+                description: f.rule.description.into(),
+                size: format::bytes(f.size).into(),
+                detail: format!("{} Dateien", format::count(f.files)).into(),
+                caution: f.rule.level == Level::Caution,
+                needs_admin: f.rule.needs_admin && !self.elevated,
+                removable: f.is_removable(),
+            })
+            .collect();
+        *self.findings.borrow_mut() = findings;
+
+        let Some(ui) = self.ui() else { return };
+        ui.set_cleanup_rows(ModelRc::new(VecModel::from(rows)));
+        self.refresh_bin_info();
+
+        let system_root = known::resolve(cleanup::Base::SystemDrive);
+        let mut hints = Vec::new();
+        if system_root.as_deref().is_some_and(|r| tree.find_path(r) != Some(Tree::ROOT)) {
+            hints.push(
+                "Nur Bereiche innerhalb des gescannten Ordners werden angezeigt – für alle das Systemlaufwerk scannen.",
+            );
+        }
+        if !self.elevated {
+            hints.push("Als Administrator werden zusätzlich Windows-Temp, Update-Downloads und Fehlerberichte erfasst und bereinigt.");
+        }
+        ui.set_cleanup_hint(hints.join("  ").into());
+    }
+
+    fn refresh_bin_info(&self) {
+        let Some(ui) = self.ui() else { return };
+        match recycle::bin_info() {
+            Some((size, items)) if items > 0 => {
+                ui.set_bin_text(
+                    format!(
+                        "Papierkorb: {} in {} Elementen – dieser Platz ist erst nach dem Leeren wirklich frei.",
+                        format::bytes(size),
+                        format::count(items)
+                    )
+                    .into(),
+                );
+                ui.set_bin_empty(false);
+            }
+            Some(_) => {
+                ui.set_bin_text("Papierkorb ist leer.".into());
+                ui.set_bin_empty(true);
+            }
+            None => {
+                ui.set_bin_text("Papierkorb-Größe unbekannt.".into());
+                ui.set_bin_empty(false);
+            }
+        }
+    }
+
+    /// Shows the first location of a finding in the folder view.
+    fn cleanup_show(&self, index: i32) {
+        let loc = self.findings.borrow().get(index as usize).and_then(|f| f.locations.first().copied());
+        let Some(tree) = self.state.borrow().tree.clone() else { return };
+        let Some(loc) = loc else { return };
+        if tree.node(loc).is_dir() {
+            self.navigate_to(loc, None);
+        } else if let Some(parent) = tree.parent(loc) {
+            self.navigate_to(parent, Some(loc));
+        }
+    }
+
+    fn cleanup_clean(self: &Rc<Self>, index: i32) {
+        if self.state.borrow().job.is_some() || self.state.borrow().delete_job.is_some() {
+            return self.set_status("Bitte warten, bis der laufende Vorgang abgeschlossen ist.");
+        }
+        let Some(finding) = self.findings.borrow().get(index as usize).cloned() else { return };
+        let Some(tree) = self.state.borrow().tree.clone() else { return };
+        // The catalogue is vetted, but the hard guard rails still apply.
+        let items: Vec<(NodeId, String)> = finding
+            .targets
+            .iter()
+            .filter(|&&id| !matches!(safety::guard(&tree, id), Some(Guard::Blocked(_))))
+            .map(|&id| (id, tree.path(id)))
+            .collect();
+        if items.is_empty() {
+            return self.set_status("Nichts zu bereinigen.");
+        }
+
+        let text = format!(
+            "{}\n\n{} in {} Dateien in den Papierkorb verschieben?\n\n{}\n\nDateien, die gerade verwendet werden, werden übersprungen. \
+             Um den Platz freizugeben, danach den Papierkorb leeren.",
+            finding.rule.title,
+            format::bytes(finding.size),
+            format::count(finding.files),
+            finding.rule.description
+        );
+        let owner = self.owner_hwnd();
+        if !shell::confirm(owner, "SpaceLens – Aufräumen", &text, finding.rule.level == Level::Caution) {
+            return;
+        }
+        self.start_delete_job(items, -1, Some(finding.rule.title), true);
+    }
+
+    /// Runs the recycle operation on a worker thread and polls for completion.
+    fn start_delete_job(
+        self: &Rc<Self>,
+        items: Vec<(NodeId, String)>,
+        row: i32,
+        cleanup: Option<&'static str>,
+        skip_errors: bool,
+    ) {
+        let owner = self.owner_hwnd();
+        let paths: Vec<String> = items.iter().map(|(_, p)| p.clone()).collect();
+        let spawned = std::thread::Builder::new()
+            .name("recycle".into())
+            .spawn(move || recycle::recycle(&paths, owner, skip_errors));
+        let handle = match spawned {
+            Ok(h) => h,
+            Err(e) => return self.set_status(format!("Löschen konnte nicht gestartet werden: {e}")),
+        };
+        self.state.borrow_mut().delete_job = Some(DeleteJob { handle, items, row, cleanup });
+        if let Some(ui) = self.ui() {
+            ui.set_deleting(true);
+        }
+        self.set_status("Wird in den Papierkorb verschoben …");
+        let weak = Rc::downgrade(self);
+        self.delete_timer.start(TimerMode::Repeated, POLL_INTERVAL, move || {
+            if let Some(app) = weak.upgrade() {
+                app.poll_delete();
+            }
+        });
+    }
+
+    /// Empties the recycle bin (Windows asks for confirmation) and removes its
+    /// contents from the tree, so the drive totals drop accordingly.
+    fn empty_bin(&self) {
+        let before = recycle::bin_info().map_or(0, |(size, _)| size);
+        match recycle::empty_bin(self.owner_hwnd()) {
+            recycle::EmptyResult::Emptied => {
+                let tree = self.state.borrow().tree.clone();
+                if let Some(tree) = tree {
+                    let bin = format!("{}\\$Recycle.Bin", tree.root_path().trim_end_matches('\\'));
+                    if let Some(bin) = tree.find_path(&bin) {
+                        let ids: Vec<NodeId> =
+                            tree.live_children(bin).flat_map(|sid| tree.live_children(sid)).collect();
+                        self.apply_removals(&ids);
+                    }
+                }
+                self.set_status(format!("Papierkorb geleert – {} freigegeben.", format::bytes(before)));
+            }
+            recycle::EmptyResult::NotEmptied => self.set_status("Papierkorb wurde nicht geleert."),
+            recycle::EmptyResult::Failed(e) => self.set_status(format!("Papierkorb leeren fehlgeschlagen: {e}")),
+        }
+        if self.state.borrow().view == View::Cleanup {
+            self.refresh_cleanup();
+        } else {
+            self.refresh_bin_info();
         }
     }
 

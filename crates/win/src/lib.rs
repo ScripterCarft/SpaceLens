@@ -8,6 +8,7 @@
 
 pub mod device;
 pub mod elevation;
+pub mod known;
 pub mod mft;
 pub mod path;
 pub mod recycle;

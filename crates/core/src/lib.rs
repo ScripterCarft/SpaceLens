@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod builder;
+pub mod cleanup;
 pub mod filetype;
 pub mod format;
 pub mod names;

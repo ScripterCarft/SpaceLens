@@ -26,7 +26,8 @@
 - USN-Journal für inkrementelle Aktualisierung ohne Neuscan
 - ✅ Löschen über Papierkorb (IFileOperation) mit Bestätigung und Schutzregeln, Baum-Update ohne Rescan
 - Mehrfachauswahl (Strg/Umschalt) zum Löschen mehrerer Einträge
-- Bekannte Aufräumziele (Temp, Caches, Windows Update, Shader-Caches) mit Erklärung
+- ✅ Aufräumen-Ansicht: Temp, Windows-Update, Übermittlungsoptimierung, Fehlerberichte,
+  Absturzabbilder, Browser-, Shader- und Entwickler-Caches, Papierkorb leeren
 - Optional: getrennter Admin-Helfer-Prozess, UI ohne Adminrechte
 
 ## Später

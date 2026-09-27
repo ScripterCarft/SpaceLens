@@ -295,6 +295,17 @@ mod tests {
     }
 
     #[test]
+    fn finds_paths_case_insensitively() {
+        let t = sample();
+        assert_eq!(t.find_path(r"C:\"), Some(0));
+        assert_eq!(t.find_path(r"c:\users\JOE"), Some(6));
+        assert_eq!(t.find_path(r"C:\Users\Joe\übergröße.bin"), Some(7));
+        assert_eq!(t.find_path(r"\\?\C:\Windows\a.dll"), Some(4));
+        assert_eq!(t.find_path(r"C:\Users\Nobody"), None);
+        assert_eq!(t.find_path(r"D:\Users"), None);
+    }
+
+    #[test]
     fn records_issues() {
         let t = sample();
         assert_eq!(t.issues(), &[ScanIssue { node: 3, code: 5 }]);

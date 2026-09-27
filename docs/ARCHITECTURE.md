@@ -156,6 +156,21 @@ Entf / Button / Kontextmenü
   damit `Arc::make_mut` den Baum exklusiv besitzt.
 - Tabellen- und Baumzeilen sind für UI Automation/Screenreader beschriftet.
 
+## Aufräumen (`core/src/cleanup.rs`, `win/src/known.rs`)
+
+- Katalog `RULES`: Titel, Erklärung, Einstufung (Sicher/Mit Vorsicht), Admin-Bedarf
+  und Ziele relativ zu bekannten Ordnern (`SHGetKnownFolderPath`), Muster mit `*`
+  pro Pfadteil (z. B. alle Browser-Profile).
+- Auswertung rein im Speicher über `Tree::find_path` + Mustervergleich: keine
+  Festplattenzugriffe, die Ansicht öffnet sofort.
+- Modus „Inhalt“ entfernt nur, was *in* einem Ordner liegt (der Ordner bleibt);
+  „Nur Info“ (Windows.old) verweist auf die Windows-Einstellungen.
+- Bereinigen = derselbe Papierkorb-Weg wie Löschen, aber mit `FOF_NOERRORUI`:
+  benutzte Dateien werden ohne Dialog übersprungen (manueller Test in
+  `recycle.rs` belegt das Verhalten). Harte Schutzregeln gelten trotzdem.
+- „Papierkorb leeren“ nutzt `SHEmptyRecycleBinW` (Windows fragt selbst) und
+  entfernt danach `$Recycle.Bin`-Inhalte aus dem Baum.
+
 ## Build & Auslieferung
 
 - Release-Profil: `lto = "fat"`, `codegen-units = 1`, `strip`, `panic = "unwind"`

@@ -55,6 +55,10 @@ Release-Build. Tags `v*` erzeugen ein GitHub-Release (`release.yml`).
 - Jeder `unsafe`-Block hat einen `// SAFETY:`-Kommentar; Handles via `OwnedHandle`.
 - Löschen **ausschließlich** in den Papierkorb (`recycle.rs`), nie ohne Rückfrage und
   nie an `core::safety` vorbei. Neue Schutzregeln immer mit Test.
+- Neue Aufräum-Regeln (`core::cleanup::RULES`) nur mit ehrlicher Erklärung der Folgen
+  und korrekter Einstufung; im Zweifel `Level::Caution` oder `Mode::InfoOnly`.
+- Code mit Backslashes (Pfade) nie per Shell-Heredoc einfügen – die Shell verschluckt
+  sie; Datei-Werkzeuge verwenden.
 - Adminrechte nur über den dokumentierten Weg: Manifest `asInvoker` +
   `ShellExecuteExW("runas")`. Keine UAC-Umgehungen, keine Dienste/Tasks.
 

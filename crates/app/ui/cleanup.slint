@@ -1,0 +1,179 @@
+// "Aufräumen" view: recycle bin bar + list of known junk locations.
+
+import { Button, ListView, Palette } from "std-widgets.slint";
+import { Theme } from "widgets.slint";
+
+export struct CleanupRow {
+    title: string,
+    description: string,
+    size: string,
+    detail: string,
+    caution: bool,
+    needs-admin: bool,
+    removable: bool,
+}
+
+component Badge inherits Rectangle {
+    in property <string> text;
+    in property <color> tint;
+    height: 18px;
+    width: label.preferred-width + 12px;
+    border-radius: 9px;
+    background: root.tint.with-alpha(0.18);
+    label := Text {
+        text: root.text;
+        color: root.tint;
+        font-size: 11px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+export component CleanupView inherits Rectangle {
+    in property <[CleanupRow]> rows;
+    in property <string> bin-text;
+    in property <bool> bin-empty: true;
+    in property <bool> busy;
+    in property <string> hint;
+
+    callback show(index: int);
+    callback clean(index: int);
+    callback empty-bin();
+
+    background: Palette.background;
+
+    VerticalLayout {
+        Rectangle {
+            background: Palette.alternate-background;
+            HorizontalLayout {
+                padding: 8px;
+                padding-left: 12px;
+                spacing: 8px;
+                Text {
+                    text: root.bin-text;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                Button {
+                    text: "Papierkorb leeren …";
+                    enabled: !root.bin-empty && !root.busy;
+                    clicked => { root.empty-bin(); }
+                }
+            }
+        }
+
+        if root.hint != "": Rectangle {
+            HorizontalLayout {
+                padding: 8px;
+                padding-left: 12px;
+                Text {
+                    text: root.hint;
+                    color: Theme.muted;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        Rectangle {
+            height: 1px;
+            background: Theme.divider;
+        }
+
+        if root.rows.length == 0: Rectangle {
+            vertical-stretch: 1;
+            Text {
+                text: "Keine bekannten Müllecken gefunden – oder sie sind nicht Teil dieses Scans.";
+                color: Theme.muted;
+            }
+        }
+
+        if root.rows.length > 0: ListView {
+            vertical-stretch: 1;
+            for row[i] in root.rows: Rectangle {
+                height: 78px;
+                accessible-role: list-item;
+                accessible-label: row.title;
+                accessible-description: row.size;
+
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    spacing: 14px;
+
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        spacing: 4px;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+                            Text {
+                                text: row.title;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                            Badge {
+                                text: row.caution ? "Mit Vorsicht" : "Sicher";
+                                tint: row.caution ? #C77700 : #2E8B57;
+                            }
+                            if row.needs-admin: Badge {
+                                text: "Admin";
+                                tint: #6A6A6A;
+                            }
+                        }
+                        Text {
+                            text: row.description;
+                            color: Theme.muted;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                            overflow: elide;
+                            height: 32px;
+                        }
+                    }
+
+                    VerticalLayout {
+                        width: 110px;
+                        alignment: center;
+                        Text {
+                            text: row.size;
+                            font-weight: 600;
+                            horizontal-alignment: right;
+                        }
+                        Text {
+                            text: row.detail;
+                            color: Theme.muted;
+                            font-size: 11px;
+                            horizontal-alignment: right;
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        Button {
+                            text: "Anzeigen";
+                            clicked => { root.show(i); }
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        width: 170px;
+                        Button {
+                            text: row.removable ? "In den Papierkorb …" : "Nur über Windows";
+                            enabled: row.removable && !root.busy;
+                            clicked => { root.clean(i); }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    background: Theme.divider;
+                }
+            }
+        }
+    }
+}

@@ -5,8 +5,9 @@ import { Theme, NavKey } from "widgets.slint";
 import { DirTree, TreeRow } from "tree.slint";
 import { EntryTable, EntryRow } from "table.slint";
 import { TreemapView, TreemapLabel, LegendItem } from "treemap.slint";
+import { CleanupView, CleanupRow } from "cleanup.slint";
 
-export { TreeRow, EntryRow, NavKey, TreemapLabel, LegendItem }
+export { TreeRow, EntryRow, NavKey, TreemapLabel, LegendItem, CleanupRow }
 
 export component MainWindow inherits Window {
     title: "SpaceLens";
@@ -39,6 +40,11 @@ export component MainWindow inherits Window {
     in property <string> location-info;
     in property <bool> can-go-up;
     in property <bool> view-largest;
+    in property <bool> view-cleanup;
+    in property <[CleanupRow]> cleanup-rows;
+    in property <string> bin-text;
+    in property <bool> bin-empty: true;
+    in property <string> cleanup-hint;
     in property <bool> deleting;
 
     // --- treemap ---
@@ -76,6 +82,10 @@ export component MainWindow inherits Window {
     callback delete-selected();
     callback show-folder-view();
     callback show-largest();
+    callback show-cleanup();
+    callback cleanup-show(index: int);
+    callback cleanup-clean(index: int);
+    callback empty-bin();
     callback entry-navigate(key: NavKey);
     callback sort-by(column: int);
     callback treemap-resized(width: length, height: length);
@@ -133,6 +143,11 @@ export component MainWindow inherits Window {
                 title: "Größte Dateien";
                 enabled: root.has-tree;
                 activated => { root.show-largest(); }
+            }
+            MenuItem {
+                title: "Aufräumen";
+                enabled: root.has-tree;
+                activated => { root.show-cleanup(); }
             }
             MenuSeparator { }
             MenuItem {
@@ -265,7 +280,7 @@ export component MainWindow inherits Window {
 
                             Button {
                                 text: "Ordnerinhalt";
-                                primary: !root.view-largest;
+                                primary: !root.view-largest && !root.view-cleanup;
                                 clicked => { root.show-folder-view(); }
                             }
 
@@ -273,6 +288,12 @@ export component MainWindow inherits Window {
                                 text: "Größte Dateien";
                                 primary: root.view-largest;
                                 clicked => { root.show-largest(); }
+                            }
+
+                            Button {
+                                text: "Aufräumen";
+                                primary: root.view-cleanup;
+                                clicked => { root.show-cleanup(); }
                             }
 
                             VerticalLayout {
@@ -290,12 +311,12 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            Button {
+                            if !root.view-cleanup: Button {
                                 text: "Im Explorer anzeigen";
                                 clicked => { root.reveal-current(); }
                             }
 
-                            Button {
+                            if !root.view-cleanup: Button {
                                 text: "In den Papierkorb …";
                                 enabled: root.entry-selected >= 0 && !root.deleting && !root.scanning;
                                 clicked => { root.delete-selected(); }
@@ -308,18 +329,39 @@ export component MainWindow inherits Window {
                         background: Theme.divider;
                     }
 
-                    table := EntryTable {
+                    // Table and cleanup view share this area; the table stays
+                    // instantiated so its state (scroll, focus) survives.
+                    Rectangle {
                         vertical-stretch: 1;
-                        rows: root.entries;
-                        selected: root.entry-selected;
-                        sort-column: root.sort-column;
-                        sort-descending: root.sort-descending;
-                        select(row) => { root.entry-select(row); }
-                        open(row) => { root.entry-open(row); }
-                        reveal(row) => { root.entry-reveal(row); }
-                        delete(row) => { root.entry-delete(row); }
-                        sort(column) => { root.sort-by(column); }
-                        navigate(key) => { root.entry-navigate(key); }
+
+                        table := EntryTable {
+                            width: parent.width;
+                            height: parent.height;
+                            visible: !root.view-cleanup;
+                            rows: root.entries;
+                            selected: root.entry-selected;
+                            sort-column: root.sort-column;
+                            sort-descending: root.sort-descending;
+                            select(row) => { root.entry-select(row); }
+                            open(row) => { root.entry-open(row); }
+                            reveal(row) => { root.entry-reveal(row); }
+                            delete(row) => { root.entry-delete(row); }
+                            sort(column) => { root.sort-by(column); }
+                            navigate(key) => { root.entry-navigate(key); }
+                        }
+
+                        if root.view-cleanup: CleanupView {
+                            width: parent.width;
+                            height: parent.height;
+                            rows: root.cleanup-rows;
+                            bin-text: root.bin-text;
+                            bin-empty: root.bin-empty;
+                            busy: root.deleting || root.scanning;
+                            hint: root.cleanup-hint;
+                            show(i) => { root.cleanup-show(i); }
+                            clean(i) => { root.cleanup-clean(i); }
+                            empty-bin => { root.empty-bin(); }
+                        }
                     }
 
                     // Draggable splitter between table and treemap.
