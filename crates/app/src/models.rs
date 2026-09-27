@@ -335,15 +335,22 @@ impl Model for EntryModel {
 }
 
 /// Path of `id` relative to its ancestor `base`, e.g. `Spiele\Alt\game.pak`.
+/// Name first, then the folder relative to `base`, e.g.
+/// `game.pak  —  Spiele\Alt`. Long paths get cut at the end, so the part
+/// that identifies the entry must come first.
 fn relative_path(tree: &Tree, base: NodeId, id: NodeId) -> String {
     let chain = tree.ancestry(id);
     let start = chain.iter().position(|&n| n == base).map_or(0, |p| p + 1);
-    let mut out = String::new();
-    for &n in &chain[start..] {
-        if !out.is_empty() {
-            out.push('\\');
+    let mut out = tree.name(id).into_owned();
+    let folders = &chain[start.min(chain.len())..chain.len().saturating_sub(1)];
+    if !folders.is_empty() {
+        out.push_str("  —  ");
+        for (i, &n) in folders.iter().enumerate() {
+            if i > 0 {
+                out.push('\\');
+            }
+            out.push_str(&tree.name(n));
         }
-        out.push_str(&tree.name(n));
     }
     out
 }

@@ -41,6 +41,7 @@ Die Exe ist nicht signiert. Beim ersten Start kann Windows SmartScreen warnen
 | Größte Dateien (aktueller Ordner) | **Größte Dateien** über der Tabelle · Doppelklick springt zum Ordner | |
 | In den Papierkorb | **In den Papierkorb …**, Rechtsklick oder *Bearbeiten* | `Entf` |
 | Aufräumen (bekannte Müllecken, Papierkorb leeren) | **Aufräumen** über der Tabelle | |
+| Suchen (Name, `*.iso`, mehrere Wörter) + Filter Typ/Größe/Alter | Suchfeld über der Tabelle | `Strg+F` |
 
 Kommandozeile: `SpaceLens.exe --scan D:\` startet direkt einen Scan.
 

@@ -19,6 +19,7 @@ use slint::{
 use spacelens_core::cleanup::{self, Finding, Level};
 use spacelens_core::filetype::{self, Category};
 use spacelens_core::safety::{self, Guard};
+use spacelens_core::search::{self, Filter, Kind};
 use spacelens_core::treemap::{Tile, Treemap};
 use spacelens_core::{NodeId, ScanError, ScanOptions, ScanOutcome, ScanProgress, Tree, flags, format, query};
 use spacelens_win::elevation::{self, RelaunchError};
@@ -65,6 +66,8 @@ enum View {
     Cleanup,
     /// All locations of one cleanup finding, listed in the table.
     Locations(&'static str),
+    /// Search results below the current directory.
+    Search,
 }
 
 /// Items being moved to the recycle bin on a worker thread.
@@ -102,6 +105,9 @@ pub struct App {
     treemap: RefCell<TreemapState>,
     treemap_timer: Timer,
     delete_timer: Timer,
+    search_timer: Timer,
+    /// Matches and total size of the last search (for the header).
+    search_summary: std::cell::Cell<(u64, u64)>,
     /// Result of the last cleanup evaluation (indices match the view rows).
     findings: RefCell<Vec<Finding>>,
     elevated: bool,
@@ -131,6 +137,8 @@ impl App {
             treemap: RefCell::new(TreemapState::default()),
             treemap_timer: Timer::default(),
             delete_timer: Timer::default(),
+            search_timer: Timer::default(),
+            search_summary: std::cell::Cell::new((0, 0)),
             findings: RefCell::new(Vec::new()),
             elevated,
             state: RefCell::new(State {
@@ -176,6 +184,9 @@ impl App {
         bind!(&app, ui, on_cleanup_show => cleanup_show(index));
         bind!(&app, ui, on_cleanup_clean => cleanup_clean(index));
         bind!(&app, ui, on_empty_bin => empty_bin());
+        bind!(&app, ui, on_search_changed => search_changed(text));
+        bind!(&app, ui, on_filters_changed => filters_changed());
+        bind!(&app, ui, on_end_search => end_search());
         bind!(&app, ui, on_entry_navigate => entry_navigate(key));
         bind!(&app, ui, on_sort_by => sort_by(column));
         bind!(&app, ui, on_show_about => show_about());
@@ -448,6 +459,18 @@ impl App {
         let n = tree.node(dir);
         let (files, dirs) = tree.counts(dir);
         ui.set_can_go_up(view != View::Folder || tree.parent(dir).is_some());
+        if view == View::Search {
+            let (matches, size) = self.search_summary.get();
+            let shown = self.entry_model.len() as u64;
+            ui.set_location(format!("Suche in {}", tree.path(dir)).into());
+            ui.set_location_info("Doppelklick springt zum Ordner".into());
+            let mut summary = format!("{} Treffer  ·  zusammen {}", format::count(matches), format::bytes(size));
+            if shown < matches {
+                summary.push_str(&format!("  ·  die {} größten angezeigt", format::count(shown)));
+            }
+            ui.set_search_summary(summary.into());
+            return;
+        }
         if let View::Locations(title) = view {
             let total: u64 = (0..self.entry_model.len())
                 .filter_map(|r| self.entry_model.id_at(r))
@@ -515,7 +538,7 @@ impl App {
         match self.state.borrow().view {
             View::Folder => {}
             View::Locations(_) => return self.show_cleanup(),
-            View::Largest | View::Cleanup => return self.show_folder_view(),
+            View::Largest | View::Cleanup | View::Search => return self.show_folder_view(),
         }
         let (tree, current) = {
             let st = self.state.borrow();
@@ -616,7 +639,7 @@ impl App {
         let n = tree.node(id);
         if n.is_dir() && !n.has(flags::NOT_FOLLOWED) {
             self.navigate_to(id, None);
-        } else if self.state.borrow().view == View::Largest {
+        } else if matches!(self.state.borrow().view, View::Largest | View::Search) {
             // From the list, jump to the file in its folder.
             if let Some(parent) = tree.parent(id) {
                 self.navigate_to(parent, Some(id));
@@ -844,6 +867,9 @@ impl App {
         self.entry_model.put_tree(Arc::clone(&tree));
         self.treemap.borrow_mut().legend_dir = None;
         self.sync_tree_selection();
+        if self.state.borrow().view == View::Search {
+            self.run_search(); // keeps match count and total size correct
+        }
         self.update_location(&tree);
         self.render_treemap();
         total
@@ -860,6 +886,83 @@ impl App {
         }
     }
 
+    // ----------------------------------------------------------- search
+
+    /// Most matches shown in the table (the largest ones).
+    const SEARCH_LIMIT: usize = 5000;
+    /// Typing pause before the search runs.
+    const SEARCH_DEBOUNCE: Duration = Duration::from_millis(120);
+
+    fn search_changed(self: &Rc<Self>, _text: SharedString) {
+        let weak = Rc::downgrade(self);
+        self.search_timer.start(TimerMode::SingleShot, Self::SEARCH_DEBOUNCE, move || {
+            if let Some(app) = weak.upgrade() {
+                app.run_search();
+            }
+        });
+    }
+
+    fn filters_changed(&self) {
+        self.run_search();
+    }
+
+    fn end_search(&self) {
+        if let Some(ui) = self.ui() {
+            ui.set_search_text(SharedString::new());
+        }
+        self.show_folder_view();
+    }
+
+    /// Translates the search box and filter bar into a [`Filter`].
+    fn current_filter(&self) -> Filter {
+        let Some(ui) = self.ui() else { return Filter::default() };
+        let type_index = ui.get_filter_type();
+        let (kind, category) = match type_index {
+            1..=10 => (Kind::Files, Category::ALL.get(type_index as usize - 1).copied()),
+            11 => (Kind::Folders, None),
+            _ => (Kind::All, None),
+        };
+        const SIZES: [u64; 6] = [0, 1 << 20, 10 << 20, 100 << 20, 1 << 30, 10 << 30];
+        const DAYS: [u64; 6] = [0, 30, 182, 365, 730, 1825];
+        let days = DAYS.get(ui.get_filter_age().max(0) as usize).copied().unwrap_or(0);
+        let modified_before = if days == 0 {
+            0
+        } else {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+            u32::try_from(now.saturating_sub(days * 86_400)).unwrap_or(u32::MAX)
+        };
+        Filter {
+            query: ui.get_search_text().to_string(),
+            kind,
+            category,
+            min_size: SIZES.get(ui.get_filter_size().max(0) as usize).copied().unwrap_or(0),
+            modified_before,
+        }
+    }
+
+    /// Searches below the current directory and shows the largest matches.
+    fn run_search(&self) {
+        let (tree, dir, column, descending) = {
+            let st = self.state.borrow();
+            (st.tree.clone(), st.current, st.sort_column, st.sort_descending)
+        };
+        let Some(tree) = tree else { return };
+        let filter = self.current_filter();
+        let started = Instant::now();
+        let result = search::search(&tree, dir, &filter, Self::SEARCH_LIMIT);
+        let elapsed = started.elapsed();
+
+        self.state.borrow_mut().view = View::Search;
+        self.search_summary.set((result.matches, result.size));
+        self.entry_model.show_list(result.ids, dir, sort_for_column(column, descending));
+        self.sync_view_flags();
+        if let Some(ui) = self.ui() {
+            ui.set_entry_selected(-1);
+        }
+        self.update_location(&tree);
+        self.set_status(format!("Suche: {} Treffer in {} ms", format::count(result.matches), elapsed.as_millis()));
+    }
+
     // ---------------------------------------------------------- cleanup
 
     /// Mirrors the current view into the UI's toggle flags.
@@ -869,6 +972,7 @@ impl App {
             ui.set_view_largest(view == View::Largest);
             ui.set_view_cleanup(view == View::Cleanup);
             ui.set_view_list(matches!(view, View::Locations(_)));
+            ui.set_view_search(view == View::Search);
         }
     }
 

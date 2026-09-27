@@ -156,6 +156,17 @@ Entf / Button / Kontextmenü
   damit `Arc::make_mut` den Baum exklusiv besitzt.
 - Tabellen- und Baumzeilen sind für UI Automation/Screenreader beschriftet.
 
+## Suche (`core/src/search.rs`)
+
+- Ein Durchlauf über den Teilbaum des aktuellen Ordners, direkt auf dem Baum im
+  Speicher. Günstige Prüfungen (Typ, Größe, Alter) zuerst, dann der Name:
+  ASCII-Namen werden ohne Kopie verglichen, `*.ext` und `prefix*` haben eigene
+  schnelle Wege, sonst ein allgemeiner Platzhalter-Vergleich.
+- Passt ein Ordner, wird sein Inhalt nicht erneut gezählt (keine doppelte Summe).
+- Nur die 5 000 größten Treffer landen in der Tabelle (Heap, O(n log k)).
+- Gemessen auf C: (485 000 Dateien): alle Suchen 12–26 ms; die UI sucht 120 ms
+  nach der letzten Eingabe.
+
 ## Aufräumen (`core/src/cleanup.rs`, `win/src/known.rs`)
 
 - Katalog `RULES`: Titel, Erklärung, Einstufung (Sicher/Mit Vorsicht), Admin-Bedarf

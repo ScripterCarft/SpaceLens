@@ -42,6 +42,12 @@ export component MainWindow inherits Window {
     in property <bool> view-largest;
     in property <bool> view-cleanup;
     in property <bool> view-list;
+    in property <bool> view-search;
+    in-out property <string> search-text;
+    in property <string> search-summary;
+    in-out property <int> filter-type: 0;
+    in-out property <int> filter-size: 0;
+    in-out property <int> filter-age: 0;
     in property <[CleanupRow]> cleanup-rows;
     in property <string> bin-text;
     in property <bool> bin-empty: true;
@@ -84,6 +90,9 @@ export component MainWindow inherits Window {
     callback show-folder-view();
     callback show-largest();
     callback show-cleanup();
+    callback search-changed(text: string);
+    callback filters-changed();
+    callback end-search();
     callback cleanup-show(index: int);
     callback cleanup-clean(index: int);
     callback empty-bin();
@@ -99,6 +108,11 @@ export component MainWindow inherits Window {
 
     public function focus-table() {
         table.focus-list();
+    }
+
+    public function focus-search() {
+        search-box.focus();
+        search-box.select-all();
     }
 
     property <length> tree-width: 340px;
@@ -135,6 +149,15 @@ export component MainWindow inherits Window {
         }
         Menu {
             title: "Navigation";
+            MenuItem {
+                title: "Suchen …";
+                shortcut: @keys(Control + F);
+                enabled: root.has-tree;
+                activated => {
+                    root.focus-search();
+                    root.search-changed(root.search-text);
+                }
+            }
             MenuItem {
                 title: "Ordnerinhalt";
                 enabled: root.has-tree;
@@ -281,7 +304,7 @@ export component MainWindow inherits Window {
 
                             Button {
                                 text: "Ordnerinhalt";
-                                primary: !root.view-largest && !root.view-cleanup && !root.view-list;
+                                primary: !root.view-largest && !root.view-cleanup && !root.view-list && !root.view-search;
                                 clicked => { root.show-folder-view(); }
                             }
 
@@ -312,6 +335,15 @@ export component MainWindow inherits Window {
                                 }
                             }
 
+                            search-box := LineEdit {
+                                width: 220px;
+                                placeholder-text: "Suchen … (Strg+F)";
+                                text <=> root.search-text;
+                                enabled: root.has-tree;
+                                edited(text) => { root.search-changed(text); }
+                                accepted(text) => { root.search-changed(text); }
+                            }
+
                             if !root.view-cleanup: Button {
                                 text: "Im Explorer anzeigen";
                                 clicked => { root.reveal-current(); }
@@ -321,6 +353,50 @@ export component MainWindow inherits Window {
                                 text: "In den Papierkorb …";
                                 enabled: root.entry-selected >= 0 && !root.deleting && !root.scanning;
                                 clicked => { root.delete-selected(); }
+                            }
+                        }
+                    }
+
+                    // Filters, only while searching.
+                    if root.view-search: Rectangle {
+                        background: Palette.alternate-background;
+                        HorizontalLayout {
+                            padding: 6px;
+                            padding-left: 8px;
+                            spacing: 8px;
+                            Text {
+                                text: "Filter:";
+                                vertical-alignment: center;
+                                color: Theme.muted;
+                            }
+                            ComboBox {
+                                width: 190px;
+                                model: ["Alle Typen", "Videos", "Musik & Audio", "Bilder", "Archive", "Disk-Images & VMs", "Programme", "Dokumente", "Code & Daten", "System", "Sonstiges", "Nur Ordner"];
+                                current-index <=> root.filter-type;
+                                selected => { root.filters-changed(); }
+                            }
+                            ComboBox {
+                                width: 150px;
+                                model: ["Jede Größe", "größer als 1 MB", "größer als 10 MB", "größer als 100 MB", "größer als 1 GB", "größer als 10 GB"];
+                                current-index <=> root.filter-size;
+                                selected => { root.filters-changed(); }
+                            }
+                            ComboBox {
+                                width: 190px;
+                                model: ["Jedes Alter", "älter als 30 Tage", "älter als 6 Monate", "älter als 1 Jahr", "älter als 2 Jahre", "älter als 5 Jahre"];
+                                current-index <=> root.filter-age;
+                                selected => { root.filters-changed(); }
+                            }
+                            Text {
+                                text: root.search-summary;
+                                color: Theme.muted;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                            }
+                            Button {
+                                text: "Suche beenden";
+                                clicked => { root.end-search(); }
                             }
                         }
                     }

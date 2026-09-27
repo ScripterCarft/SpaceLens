@@ -49,3 +49,31 @@ fn top_level_tiles() {
         );
     }
 }
+
+#[test]
+#[ignore]
+fn search_speed_on_system_drive() {
+    use spacelens_core::search::{Filter, Kind, search};
+    let out = spacelens_win::walker::WalkScanner
+        .scan(Path::new("C:\\"), &ScanOptions::default(), &ScanProgress::new())
+        .unwrap();
+    let tree = out.tree;
+    let cases = [
+        ("leer (alle Dateien)", Filter::default()),
+        ("Text 'node_modules'", Filter { query: "node_modules".into(), ..Filter::default() }),
+        ("Muster '*.dll'", Filter { query: "*.dll".into(), ..Filter::default() }),
+        ("Zwei Wörter", Filter { query: "microsoft update".into(), ..Filter::default() }),
+        ("Videos > 1 MB", Filter { category: Some(filetype::Category::Video), min_size: 1 << 20, ..Filter::default() }),
+        ("Nur Ordner", Filter { kind: Kind::Folders, ..Filter::default() }),
+    ];
+    for (label, f) in cases {
+        let t = Instant::now();
+        let r = search(&tree, Tree::ROOT, &f, 5000);
+        eprintln!(
+            "{label:22} {:>8} Treffer  {:>10}  {:?}",
+            r.matches,
+            spacelens_core::format::bytes(r.size),
+            t.elapsed()
+        );
+    }
+}

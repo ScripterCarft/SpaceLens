@@ -18,7 +18,8 @@
 - ✅ Treemap (Squarified, in Rust gerendert, Hover/Klick/Doppelklick, Legende)
 - ✅ Dateityp-Kategorien mit Summen pro Ordner
 - ✅ Größte Dateien (aktueller Ordner, Top 1000)
-- Filter/Suche, Ansicht „nach Endung“
+- ✅ Suche & Filter (Text, Platzhalter, Typ, Größe, Alter; < 30 ms auf C:)
+- Ansicht „nach Endung“
 - Fehlerliste (Ordner ohne Zugriff) als eigene Ansicht
 - Export (CSV)
 
