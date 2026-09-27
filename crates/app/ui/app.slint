@@ -41,6 +41,7 @@ export component MainWindow inherits Window {
     in property <bool> can-go-up;
     in property <bool> view-largest;
     in property <bool> view-cleanup;
+    in property <bool> view-list;
     in property <[CleanupRow]> cleanup-rows;
     in property <string> bin-text;
     in property <bool> bin-empty: true;
@@ -280,7 +281,7 @@ export component MainWindow inherits Window {
 
                             Button {
                                 text: "Ordnerinhalt";
-                                primary: !root.view-largest && !root.view-cleanup;
+                                primary: !root.view-largest && !root.view-cleanup && !root.view-list;
                                 clicked => { root.show-folder-view(); }
                             }
 

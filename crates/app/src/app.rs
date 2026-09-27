@@ -63,6 +63,8 @@ enum View {
     Largest,
     /// Known junk locations.
     Cleanup,
+    /// All locations of one cleanup finding, listed in the table.
+    Locations(&'static str),
 }
 
 /// Items being moved to the recycle bin on a worker thread.
@@ -73,10 +75,15 @@ struct DeleteJob {
     row: i32,
     /// Set for cleanup-view jobs (bulk, errors skipped silently).
     cleanup: Option<&'static str>,
+    /// Tree generation the node ids belong to (see [`State::generation`]).
+    generation: u64,
 }
 
 struct State {
     tree: Option<Arc<Tree>>,
+    /// Incremented whenever a different tree is shown, so results of work that
+    /// started on an older tree (node ids!) are never applied to a newer one.
+    generation: u64,
     job: Option<ScanJob>,
     delete_job: Option<DeleteJob>,
     view: View,
@@ -128,6 +135,7 @@ impl App {
             elevated,
             state: RefCell::new(State {
                 tree: None,
+                generation: 0,
                 job: None,
                 delete_job: None,
                 view: View::Folder,
@@ -228,6 +236,10 @@ impl App {
             return;
         }
         if self.state.borrow().job.is_some() {
+            return;
+        }
+        if self.state.borrow().delete_job.is_some() {
+            self.set_status("Bitte warten, bis das Verschieben in den Papierkorb abgeschlossen ist.");
             return;
         }
 
@@ -350,7 +362,12 @@ impl App {
 
     fn show_tree(&self, tree: Option<Arc<Tree>>) {
         let has_tree = tree.is_some();
-        self.state.borrow_mut().tree = tree.clone();
+        {
+            let mut st = self.state.borrow_mut();
+            st.tree = tree.clone();
+            st.generation += 1;
+        }
+        self.findings.borrow_mut().clear();
         self.entry_model.set_tree(tree.clone());
         self.tree_model.set_tree(tree);
         if let Some(ui) = self.ui() {
@@ -373,6 +390,10 @@ impl App {
     // ------------------------------------------------------- elevation
 
     fn elevate(&self) {
+        if self.state.borrow().delete_job.is_some() {
+            self.set_status("Bitte warten, bis das Verschieben in den Papierkorb abgeschlossen ist.");
+            return;
+        }
         let path = self.ui().map(|ui| ui.get_scan_path().trim().to_string()).unwrap_or_default();
         let mut args: Vec<OsString> = Vec::new();
         if !path.is_empty() {
@@ -419,13 +440,25 @@ impl App {
         if self.state.borrow().view == View::Cleanup {
             return; // header belongs to the cleanup view
         }
-        let (dir, largest) = {
+        let (dir, view) = {
             let st = self.state.borrow();
-            (st.current, st.view == View::Largest)
+            (st.current, st.view)
         };
+        let largest = view == View::Largest;
         let n = tree.node(dir);
         let (files, dirs) = tree.counts(dir);
-        ui.set_can_go_up(largest || tree.parent(dir).is_some());
+        ui.set_can_go_up(view != View::Folder || tree.parent(dir).is_some());
+        if let View::Locations(title) = view {
+            let total: u64 = (0..self.entry_model.len())
+                .filter_map(|r| self.entry_model.id_at(r))
+                .map(|id| tree.node(id).size)
+                .sum();
+            ui.set_location(format!("{title} – {} Orte", self.entry_model.len()).into());
+            ui.set_location_info(
+                format!("Zusammen {}  ·  Doppelklick öffnet den Ordner  ·  ↑ zurück", format::bytes(total)).into(),
+            );
+            return;
+        }
         if largest {
             ui.set_location(format!("Größte Dateien in {}", tree.path(dir)).into());
             ui.set_location_info(
@@ -479,8 +512,10 @@ impl App {
     }
 
     fn go_up(&self) {
-        if self.state.borrow().view != View::Folder {
-            return self.show_folder_view();
+        match self.state.borrow().view {
+            View::Folder => {}
+            View::Locations(_) => return self.show_cleanup(),
+            View::Largest | View::Cleanup => return self.show_folder_view(),
         }
         let (tree, current) = {
             let st = self.state.borrow();
@@ -744,6 +779,11 @@ impl App {
             Err(_) => return self.set_status("Löschen fehlgeschlagen: interner Fehler."),
         };
 
+        if job.generation != self.state.borrow().generation {
+            // Defensive: a different tree is shown now; its node ids mean other files.
+            self.set_status("In den Papierkorb verschoben. Die Anzeige wurde inzwischen neu geladen.");
+            return;
+        }
         // Trust the file system, not the dialog outcome: the user may have
         // skipped single items, or files may have been in use.
         let gone: Vec<NodeId> =
@@ -828,6 +868,7 @@ impl App {
         if let Some(ui) = self.ui() {
             ui.set_view_largest(view == View::Largest);
             ui.set_view_cleanup(view == View::Cleanup);
+            ui.set_view_list(matches!(view, View::Locations(_)));
         }
     }
 
@@ -906,11 +947,30 @@ impl App {
         }
     }
 
-    /// Shows the first location of a finding in the folder view.
+    /// A single location opens directly; several are listed in the table.
     fn cleanup_show(&self, index: i32) {
-        let loc = self.findings.borrow().get(index as usize).and_then(|f| f.locations.first().copied());
+        let Some((title, locations)) =
+            self.findings.borrow().get(index as usize).map(|f| (f.rule.title, f.locations.clone()))
+        else {
+            return;
+        };
         let Some(tree) = self.state.borrow().tree.clone() else { return };
-        let Some(loc) = loc else { return };
+        if locations.len() > 1 {
+            let (column, descending) = {
+                let mut st = self.state.borrow_mut();
+                st.view = View::Locations(title);
+                (st.sort_column, st.sort_descending)
+            };
+            self.entry_model.show_list(locations, Tree::ROOT, sort_for_column(column, descending));
+            self.sync_view_flags();
+            if let Some(ui) = self.ui() {
+                ui.set_entry_selected(-1);
+                ui.invoke_focus_table();
+            }
+            self.update_location(&tree);
+            return;
+        }
+        let Some(&loc) = locations.first() else { return };
         if tree.node(loc).is_dir() {
             self.navigate_to(loc, None);
         } else if let Some(parent) = tree.parent(loc) {
@@ -967,7 +1027,8 @@ impl App {
             Ok(h) => h,
             Err(e) => return self.set_status(format!("Löschen konnte nicht gestartet werden: {e}")),
         };
-        self.state.borrow_mut().delete_job = Some(DeleteJob { handle, items, row, cleanup });
+        let generation = self.state.borrow().generation;
+        self.state.borrow_mut().delete_job = Some(DeleteJob { handle, items, row, cleanup, generation });
         if let Some(ui) = self.ui() {
             ui.set_deleting(true);
         }
@@ -983,6 +1044,10 @@ impl App {
     /// Empties the recycle bin (Windows asks for confirmation) and removes its
     /// contents from the tree, so the drive totals drop accordingly.
     fn empty_bin(&self) {
+        if self.state.borrow().delete_job.is_some() {
+            self.set_status("Bitte warten, bis das Verschieben in den Papierkorb abgeschlossen ist.");
+            return;
+        }
         let before = recycle::bin_info().map_or(0, |(size, _)| size);
         match recycle::empty_bin(self.owner_hwnd()) {
             recycle::EmptyResult::Emptied => {
