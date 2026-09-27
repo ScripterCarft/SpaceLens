@@ -82,7 +82,8 @@ export component MainWindow inherits Window {
     callback tree-toggle(row: int);
     callback tree-select(row: int);
     callback tree-navigate(key: NavKey);
-    callback entry-select(row: int);
+    callback entry-click(row: int, ctrl: bool, shift: bool);
+    callback entry-select-all();
     callback entry-open(row: int);
     callback entry-reveal(row: int);
     callback entry-delete(row: int);
@@ -96,7 +97,7 @@ export component MainWindow inherits Window {
     callback cleanup-show(index: int);
     callback cleanup-clean(index: int);
     callback empty-bin();
-    callback entry-navigate(key: NavKey);
+    callback entry-navigate(key: NavKey, shift: bool);
     callback sort-by(column: int);
     callback treemap-resized(width: length, height: length);
     callback treemap-hovered(x: length, y: length);
@@ -419,12 +420,13 @@ export component MainWindow inherits Window {
                             selected: root.entry-selected;
                             sort-column: root.sort-column;
                             sort-descending: root.sort-descending;
-                            select(row) => { root.entry-select(row); }
+                            click(row, ctrl, shift) => { root.entry-click(row, ctrl, shift); }
+                            select-all => { root.entry-select-all(); }
                             open(row) => { root.entry-open(row); }
                             reveal(row) => { root.entry-reveal(row); }
                             delete(row) => { root.entry-delete(row); }
                             sort(column) => { root.sort-by(column); }
-                            navigate(key) => { root.entry-navigate(key); }
+                            navigate(key, shift) => { root.entry-navigate(key, shift); }
                         }
 
                         if root.view-cleanup: CleanupView {

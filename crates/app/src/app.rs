@@ -173,7 +173,8 @@ impl App {
         bind!(&app, ui, on_tree_toggle => tree_toggle(row));
         bind!(&app, ui, on_tree_select => tree_select(row));
         bind!(&app, ui, on_tree_navigate => tree_navigate(key));
-        bind!(&app, ui, on_entry_select => entry_select(row));
+        bind!(&app, ui, on_entry_click => entry_click(row, ctrl, shift));
+        bind!(&app, ui, on_entry_select_all => entry_select_all());
         bind!(&app, ui, on_entry_open => entry_open(row));
         bind!(&app, ui, on_entry_reveal => entry_reveal(row));
         bind!(&app, ui, on_entry_delete => entry_delete(row));
@@ -187,7 +188,7 @@ impl App {
         bind!(&app, ui, on_search_changed => search_changed(text));
         bind!(&app, ui, on_filters_changed => filters_changed());
         bind!(&app, ui, on_end_search => end_search());
-        bind!(&app, ui, on_entry_navigate => entry_navigate(key));
+        bind!(&app, ui, on_entry_navigate => entry_navigate(key, shift));
         bind!(&app, ui, on_sort_by => sort_by(column));
         bind!(&app, ui, on_show_about => show_about());
         bind!(&app, ui, on_treemap_resized => treemap_resized(width, height));
@@ -613,11 +614,59 @@ impl App {
         self.tree_select(target as i32);
     }
 
+    /// Plain selection of one row (keyboard, programmatic).
     fn entry_select(&self, row: i32) {
+        self.entry_click(row, false, false);
+    }
+
+    /// Explorer-like selection: click = single, Ctrl = toggle, Shift = range
+    /// from the anchor (Ctrl+Shift adds the range).
+    fn entry_click(&self, row: i32, ctrl: bool, shift: bool) {
         let Some(ui) = self.ui() else { return };
+        let Ok(r) = usize::try_from(row) else { return };
+        if r >= self.entry_model.len() {
+            return;
+        }
+        if shift {
+            let anchor = self.entry_model.anchor().unwrap_or(r);
+            self.entry_model.select_range(anchor, r, ctrl);
+        } else {
+            if ctrl {
+                self.entry_model.toggle(r);
+            } else {
+                self.entry_model.select_range(r, r, false);
+            }
+            self.entry_model.set_anchor(r);
+        }
         ui.set_entry_selected(row);
-        let tree = self.state.borrow().tree.clone();
-        if let (Some(tree), Some(id)) = (tree, self.entry_model.id_at(row as usize)) {
+        self.update_selection_status(r);
+    }
+
+    fn entry_select_all(&self) {
+        self.entry_model.select_all();
+        let cursor = self.ui().map_or(0, |ui| ui.get_entry_selected().max(0) as usize);
+        self.update_selection_status(cursor);
+    }
+
+    /// Status line: details of the row under the cursor, or the sum of a
+    /// multi-selection.
+    fn update_selection_status(&self, cursor: usize) {
+        let Some(ui) = self.ui() else { return };
+        let Some(tree) = self.state.borrow().tree.clone() else { return };
+        let selected = self.entry_model.selected_ids();
+        if selected.len() > 1 {
+            let size: u64 = query::outermost(&tree, &selected).iter().map(|&id| tree.node(id).size).sum();
+            ui.set_status(
+                format!(
+                    "{} ausgewählt  ·  zusammen {}  ·  Entf verschiebt alle in den Papierkorb",
+                    format::count(selected.len() as u64),
+                    format::bytes(size)
+                )
+                .into(),
+            );
+            return;
+        }
+        if let Some(id) = self.entry_model.id_at(cursor) {
             let n = tree.node(id);
             let mut info = tree.path(id);
             if n.has(flags::NOT_FOLLOWED) {
@@ -655,7 +704,7 @@ impl App {
         }
     }
 
-    fn entry_navigate(self: &Rc<Self>, key: NavKey) {
+    fn entry_navigate(self: &Rc<Self>, key: NavKey, shift: bool) {
         let Some(ui) = self.ui() else { return };
         let len = self.entry_model.len();
         let cur = ui.get_entry_selected();
@@ -687,7 +736,7 @@ impl App {
             }
         };
         if len > 0 {
-            self.entry_select(target);
+            self.entry_click(target, false, shift);
         }
     }
 
@@ -752,6 +801,14 @@ impl App {
         }
         let tree = self.state.borrow().tree.clone();
         let (Some(tree), Some(id)) = (tree, self.entry_model.id_at(row.max(0) as usize)) else { return };
+
+        // Explorer semantics: acting on a selected row acts on the whole
+        // selection; acting on an unselected row acts on that row only.
+        let selected = self.entry_model.selected_ids();
+        if selected.len() > 1 && selected.contains(&id) {
+            return self.delete_many(&tree, &selected, row);
+        }
+
         let path = tree.path(id);
         let guard = safety::guard(&tree, id);
         if let Some(Guard::Blocked(why)) = guard {
@@ -784,6 +841,57 @@ impl App {
         }
 
         self.start_delete_job(vec![(id, path)], row, None, false);
+    }
+
+    /// Several items: all-or-nothing guard check, one summary confirmation.
+    fn delete_many(self: &Rc<Self>, tree: &Tree, selected: &[NodeId], row: i32) {
+        const SHOWN: usize = 8;
+        let ids = query::outermost(tree, selected);
+
+        let blocked: Vec<String> = ids
+            .iter()
+            .filter_map(|&id| match safety::guard(tree, id) {
+                Some(Guard::Blocked(why)) => Some(format!("{}\n    {why}", tree.path(id))),
+                _ => None,
+            })
+            .collect();
+        if !blocked.is_empty() {
+            let mut text = format!(
+                "{} der ausgewählten Einträge dürfen nicht gelöscht werden – es wurde nichts verschoben.\n\n",
+                blocked.len()
+            );
+            text.push_str(&blocked.iter().take(SHOWN).cloned().collect::<Vec<_>>().join("\n"));
+            if blocked.len() > SHOWN {
+                text.push_str(&format!("\n… und {} weitere", blocked.len() - SHOWN));
+            }
+            text.push_str("\n\nBitte diese Einträge aus der Auswahl nehmen (Strg + Klick).");
+            shell::message_box("SpaceLens – Nicht löschbar", &text, false);
+            return;
+        }
+
+        let warn = ids.iter().any(|&id| matches!(safety::guard(tree, id), Some(Guard::Warn(_))));
+        let size: u64 = ids.iter().map(|&id| tree.node(id).size).sum();
+        let files: u64 =
+            ids.iter().map(|&id| if tree.node(id).is_dir() { u64::from(tree.counts(id).0) } else { 1 }).sum();
+        let mut text = format!("{} Einträge in den Papierkorb verschieben?\n\n", format::count(ids.len() as u64));
+        for &id in ids.iter().take(SHOWN) {
+            text.push_str(&tree.path(id));
+            text.push('\n');
+        }
+        if ids.len() > SHOWN {
+            text.push_str(&format!("… und {} weitere\n", format::count((ids.len() - SHOWN) as u64)));
+        }
+        text.push_str(&format!("\nZusammen {} in {} Dateien.", format::bytes(size), format::count(files)));
+        if warn {
+            text.push_str(
+                "\n\n⚠ Einige Einträge gehören zu Windows oder installierten Programmen. Löschen kann diese beschädigen.",
+            );
+        }
+        if !shell::confirm(self.owner_hwnd(), "SpaceLens – In den Papierkorb", &text, warn) {
+            return;
+        }
+        let items: Vec<(NodeId, String)> = ids.iter().map(|&id| (id, tree.path(id))).collect();
+        self.start_delete_job(items, row, None, false);
     }
 
     fn poll_delete(&self) {
@@ -831,15 +939,30 @@ impl App {
             self.refresh_cleanup();
             return;
         }
-        let name = job.items.first().map_or_else(String::new, |(_, p)| p.clone());
+        let what = match job.items.as_slice() {
+            [(_, path)] => path.clone(),
+            items => {
+                let skipped = items.len() - gone.len();
+                let mut s = format!("{} Einträge", format::count(gone.len() as u64));
+                if skipped > 0 {
+                    s.push_str(&format!(" ({} konnten nicht verschoben werden)", format::count(skipped as u64)));
+                }
+                s
+            }
+        };
+        // Keep the cursor position so the next item can be deleted right away.
+        let len = self.entry_model.len() as i32;
+        if len > 0 {
+            self.entry_select(job.row.clamp(0, len - 1));
+        } else if let Some(ui) = self.ui() {
+            ui.set_entry_selected(-1);
+        }
         self.set_status(format!(
-            "In den Papierkorb verschoben: {name}  ·  {} – der Platz wird frei, sobald der Papierkorb geleert wird",
+            "In den Papierkorb verschoben: {what}  ·  {} – der Platz wird frei, sobald der Papierkorb geleert wird",
             format::bytes(removed.alloc)
         ));
         self.refresh_bin_info();
         if let Some(ui) = self.ui() {
-            let len = self.entry_model.len() as i32;
-            ui.set_entry_selected(if len == 0 { -1 } else { job.row.min(len - 1) });
             ui.invoke_focus_table();
         }
     }

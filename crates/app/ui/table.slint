@@ -17,6 +17,7 @@ export struct EntryRow {
     error: bool,
     link: bool,
     dim: bool,
+    selected: bool,
 }
 
 // Column ids shared with Rust (see `SortColumn` in models.rs).
@@ -88,12 +89,13 @@ export component EntryTable inherits Rectangle {
     in property <bool> sort-descending;
     out property <int> page-rows: max(1, floor(list.visible-height / Theme.row-height));
 
-    callback select(row: int);
+    callback click(row: int, ctrl: bool, shift: bool);
+    callback select-all();
     callback open(row: int);
     callback reveal(row: int);
     callback delete(row: int);
     callback sort(column: int);
-    callback navigate(key: NavKey);
+    callback navigate(key: NavKey, shift: bool);
 
     public function focus-list() {
         fs.focus();
@@ -177,37 +179,49 @@ export component EntryTable inherits Rectangle {
         fs := FocusScope {
             vertical-stretch: 1;
             key-pressed(event) => {
-                if event.text == Key.UpArrow { root.navigate(NavKey.up); return accept; }
-                if event.text == Key.DownArrow { root.navigate(NavKey.down); return accept; }
-                if event.text == Key.Home { root.navigate(NavKey.home); return accept; }
-                if event.text == Key.End { root.navigate(NavKey.end); return accept; }
-                if event.text == Key.PageUp { root.navigate(NavKey.page-up); return accept; }
-                if event.text == Key.PageDown { root.navigate(NavKey.page-down); return accept; }
-                if event.text == Key.Return { root.navigate(NavKey.activate); return accept; }
-                if event.text == Key.Backspace { root.navigate(NavKey.back); return accept; }
-                if event.text == Key.Delete { root.navigate(NavKey.delete); return accept; }
+                if event.modifiers.control && (event.text == "a" || event.text == "A") {
+                    root.select-all();
+                    return accept;
+                }
+                if event.text == Key.UpArrow { root.navigate(NavKey.up, event.modifiers.shift); return accept; }
+                if event.text == Key.DownArrow { root.navigate(NavKey.down, event.modifiers.shift); return accept; }
+                if event.text == Key.Home { root.navigate(NavKey.home, event.modifiers.shift); return accept; }
+                if event.text == Key.End { root.navigate(NavKey.end, event.modifiers.shift); return accept; }
+                if event.text == Key.PageUp { root.navigate(NavKey.page-up, event.modifiers.shift); return accept; }
+                if event.text == Key.PageDown { root.navigate(NavKey.page-down, event.modifiers.shift); return accept; }
+                if event.text == Key.Return { root.navigate(NavKey.activate, false); return accept; }
+                if event.text == Key.Backspace { root.navigate(NavKey.back, false); return accept; }
+                if event.text == Key.Delete { root.navigate(NavKey.delete, false); return accept; }
                 reject
             }
 
             list := ListView {
                 for row[i] in root.rows: Rectangle {
                     height: Theme.row-height;
-                    background: i == root.selected ? Theme.selected : area.has-hover ? Theme.hover : transparent;
+                    background: row.selected ? Theme.selected : area.has-hover ? Theme.hover : transparent;
                     accessible-role: list-item;
                     accessible-label: row.name;
                     accessible-description: row.size;
                     accessible-item-index: i;
                     accessible-item-selectable: true;
-                    accessible-item-selected: i == root.selected;
+                    accessible-item-selected: row.selected;
                     accessible-action-default => {
                         fs.focus();
-                        root.select(i);
+                        root.click(i, false, false);
+                    }
+
+                    // Keyboard cursor (may differ from the selection with Ctrl).
+                    if i == root.selected: Rectangle {
+                        border-width: 1px;
+                        border-color: Theme.bar-fill;
                     }
 
                     area := TouchArea {
-                        clicked => {
-                            fs.focus();
-                            root.select(i);
+                        pointer-event(event) => {
+                            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                                fs.focus();
+                                root.click(i, event.modifiers.control, event.modifiers.shift);
+                            }
                         }
                         double-clicked => {
                             root.open(i);

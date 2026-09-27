@@ -26,7 +26,7 @@
 ## 0.4 – Live & Aufräumen
 - USN-Journal für inkrementelle Aktualisierung ohne Neuscan
 - ✅ Löschen über Papierkorb (IFileOperation) mit Bestätigung und Schutzregeln, Baum-Update ohne Rescan
-- Mehrfachauswahl (Strg/Umschalt) zum Löschen mehrerer Einträge
+- ✅ Mehrfachauswahl (Strg/Umschalt, Strg+A) und Sammel-Löschen mit Alles-oder-nichts-Schutzprüfung
 - ✅ Aufräumen-Ansicht: Temp, Windows-Update, Übermittlungsoptimierung, Fehlerberichte,
   Absturzabbilder, Browser-, Shader- und Entwickler-Caches, Papierkorb leeren
 - Optional: getrennter Admin-Helfer-Prozess, UI ohne Adminrechte

@@ -118,6 +118,25 @@ pub fn largest_files(tree: &Tree, root: NodeId, k: usize) -> Vec<NodeId> {
     out.into_iter().map(|(_, id)| id).collect()
 }
 
+/// Drops ids that lie inside another id of the list (a selected folder and
+/// something in it), so nothing is counted or deleted twice. Keeps the order.
+pub fn outermost(tree: &Tree, ids: &[NodeId]) -> Vec<NodeId> {
+    let set: std::collections::HashSet<NodeId> = ids.iter().copied().collect();
+    ids.iter()
+        .copied()
+        .filter(|&id| {
+            let mut cur = tree.parent(id);
+            while let Some(p) = cur {
+                if set.contains(&p) {
+                    return false;
+                }
+                cur = tree.parent(p);
+            }
+            true
+        })
+        .collect()
+}
+
 /// Share of `part` in `whole` in the range `0.0..=1.0`.
 #[inline]
 pub fn fraction(part: u64, whole: u64) -> f32 {
@@ -178,6 +197,27 @@ mod tests {
         assert_eq!(names(&t, &ids).to_lowercase(), "aa", "the two 7-byte files; B and c are directories");
         assert_eq!(names(&t, &largest_files(&t, 0, 10)).to_lowercase(), "aab", "all files, largest first");
         assert!(largest_files(&t, 0, 0).is_empty());
+    }
+
+    #[test]
+    fn outermost_drops_nested_ids() {
+        let mut b = TreeBuilder::new("R:\\");
+        let names = b"dirfileinner";
+        let e = |off: u32, len: u16, dir: bool| RawEntry {
+            size: 1,
+            alloc: 1,
+            mtime: 0,
+            name_off: off,
+            name_len: len,
+            flags: if dir { flags::DIR } else { 0 },
+        };
+        let mut sub = Vec::new();
+        b.add_listing(0, &[e(0, 3, true), e(3, 4, false)], names, |id| sub.push(id)).unwrap();
+        b.add_listing(sub[0], &[e(7, 5, false)], names, |_| {}).unwrap();
+        let t = b.finish();
+        // ids: 1 = dir, 2 = file, 3 = dir\inner
+        assert_eq!(outermost(&t, &[3, 1, 2]), vec![1, 2]);
+        assert_eq!(outermost(&t, &[3, 2]), vec![3, 2]);
     }
 
     #[test]

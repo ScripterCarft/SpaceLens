@@ -7,6 +7,7 @@
 
 use std::any::Any;
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use slint::{Model, ModelNotify, ModelTracker, SharedString};
@@ -230,6 +231,10 @@ pub struct EntryModel {
     /// Flat list (e.g. largest files) showing full paths instead of names.
     list_mode: Cell<bool>,
     rows: RefCell<Vec<NodeId>>,
+    /// Multi-selection (node ids, independent of sorting).
+    selection: RefCell<HashSet<NodeId>>,
+    /// Row where a Shift range starts (last plain or Ctrl click).
+    anchor: Cell<Option<usize>>,
     notify: ModelNotify,
 }
 
@@ -237,6 +242,8 @@ impl EntryModel {
     pub fn set_tree(&self, tree: Option<Arc<Tree>>) {
         *self.tree.borrow_mut() = tree;
         self.rows.borrow_mut().clear();
+        self.selection.borrow_mut().clear();
+        self.anchor.set(None);
         self.notify.reset();
     }
 
@@ -244,6 +251,8 @@ impl EntryModel {
         let Some(tree) = self.tree.borrow().clone() else { return };
         self.dir.set(dir);
         self.list_mode.set(false);
+        self.selection.borrow_mut().clear();
+        self.anchor.set(None);
         *self.rows.borrow_mut() = query::sorted_children(&tree, dir, sort, false);
         self.notify.reset();
     }
@@ -253,6 +262,8 @@ impl EntryModel {
         let Some(tree) = self.tree.borrow().clone() else { return };
         self.dir.set(base);
         self.list_mode.set(true);
+        self.selection.borrow_mut().clear();
+        self.anchor.set(None);
         let mut ids = ids;
         query::sort_ids(&tree, &mut ids, sort);
         *self.rows.borrow_mut() = ids;
@@ -267,6 +278,7 @@ impl EntryModel {
     /// Re-attaches a (modified) tree, dropping rows that were removed.
     pub fn put_tree(&self, tree: Arc<Tree>) {
         self.rows.borrow_mut().retain(|&id| !tree.node(id).has(flags::DELETED));
+        self.selection.borrow_mut().retain(|&id| !tree.node(id).has(flags::DELETED));
         *self.tree.borrow_mut() = Some(tree);
         self.notify.reset();
     }
@@ -287,6 +299,53 @@ impl EntryModel {
 
     pub fn len(&self) -> usize {
         self.rows.borrow().len()
+    }
+
+    // ----- selection -----
+
+    pub fn anchor(&self) -> Option<usize> {
+        self.anchor.get().filter(|&a| a < self.len())
+    }
+
+    pub fn set_anchor(&self, row: usize) {
+        self.anchor.set(Some(row));
+    }
+
+    /// Replaces the selection with the rows in `range` (inclusive, any order).
+    pub fn select_range(&self, a: usize, b: usize, add: bool) {
+        let (lo, hi) = (a.min(b), a.max(b));
+        {
+            let rows = self.rows.borrow();
+            let mut sel = self.selection.borrow_mut();
+            if !add {
+                sel.clear();
+            }
+            sel.extend(rows.iter().take(hi + 1).skip(lo).copied());
+        }
+        self.notify.reset();
+    }
+
+    pub fn toggle(&self, row: usize) {
+        let Some(id) = self.id_at(row) else { return };
+        {
+            let mut sel = self.selection.borrow_mut();
+            if !sel.remove(&id) {
+                sel.insert(id);
+            }
+        }
+        self.notify.row_changed(row);
+    }
+
+    pub fn select_all(&self) {
+        let all: HashSet<NodeId> = self.rows.borrow().iter().copied().collect();
+        *self.selection.borrow_mut() = all;
+        self.notify.reset();
+    }
+
+    /// Selected ids in display order.
+    pub fn selected_ids(&self) -> Vec<NodeId> {
+        let sel = self.selection.borrow();
+        self.rows.borrow().iter().copied().filter(|id| sel.contains(id)).collect()
     }
 }
 
@@ -322,6 +381,7 @@ impl Model for EntryModel {
             error: n.has(flags::ERROR),
             link: n.has(flags::NOT_FOLLOWED),
             dim: n.has(flags::HIDDEN) || n.has(flags::SYSTEM),
+            selected: self.selection.borrow().contains(&id),
         })
     }
 
