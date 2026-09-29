@@ -113,3 +113,22 @@ fn duplicates_on_system_drive() {
         eprintln!("  {} × {}  {}", g.ids.len(), spacelens_core::format::bytes(g.size), tree.path(g.ids[0]));
     }
 }
+
+#[test]
+#[ignore]
+fn cleanup_tab_cost() {
+    use spacelens_core::cleanup;
+    let out = spacelens_win::walker::WalkScanner
+        .scan(Path::new("C:\\"), &ScanOptions::default(), &ScanProgress::new())
+        .unwrap();
+    let tree = out.tree;
+    let t = Instant::now();
+    let _ = spacelens_win::known::resolve(cleanup::Base::LocalAppData);
+    eprintln!("1× known folder: {:?}", t.elapsed());
+    let t = Instant::now();
+    let found = cleanup::evaluate(&tree, spacelens_win::known::resolve);
+    eprintln!("evaluate: {} Funde in {:?}", found.len(), t.elapsed());
+    let t = Instant::now();
+    let bin = spacelens_win::recycle::bin_info();
+    eprintln!("bin_info: {bin:?} in {:?}", t.elapsed());
+}

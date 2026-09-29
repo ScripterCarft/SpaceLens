@@ -33,6 +33,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target/release/SpaceLens.exe, target/release/spacelens-cli.exe dist/
+          # Symbols for readable crash reports (keep next to the exe).
+          Copy-Item target/release/SpaceLens.pdb dist/ -ErrorAction SilentlyContinue
           Get-ChildItem dist | Format-Table Name, Length
       - uses: actions/upload-artifact@v7
         with:

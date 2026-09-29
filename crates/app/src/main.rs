@@ -8,6 +8,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod diag;
 mod models;
 
 use std::process::ExitCode;
@@ -33,10 +34,16 @@ mod ui {
 pub use ui::*;
 
 fn main() -> ExitCode {
+    diag::init(spacelens_win::known::data_dir().map(|d| d.join("logs")));
     install_panic_hook();
 
     let scan_arg = parse_scan_arg();
     let elevated = elevation::is_elevated();
+    diag::log(&format!(
+        "Start SpaceLens {} ({})",
+        env!("CARGO_PKG_VERSION"),
+        if elevated { "Administrator" } else { "Standardbenutzer" }
+    ));
     if elevated {
         // Lets directory opens bypass ACLs (read-only) so protected folders
         // are measured too.
@@ -89,20 +96,26 @@ fn parse_scan_arg() -> Option<String> {
     None
 }
 
-/// Reports fatal panics visibly (a GUI app has no console). Panics inside
-/// scan workers are caught and recorded per directory, so they are only logged.
+/// Every panic gets a crash report on disk. Fatal ones (not inside workers,
+/// which catch panics per directory/file) are also shown to the user,
+/// together with the report's location.
 fn install_panic_hook() {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        let report = diag::crash_report(info);
         let thread = std::thread::current();
         let name = thread.name().unwrap_or("?");
-        if name.starts_with("scan-worker") {
+        if name.starts_with("scan-worker") || name.starts_with("mft-parser") {
             default(info);
             return;
         }
+        let where_ = report.map_or_else(
+            || "Es konnte kein Bericht geschrieben werden.".to_string(),
+            |p| format!("Ein Bericht wurde gespeichert:\n{}", p.display()),
+        );
         shell::message_box(
             "SpaceLens – Unerwarteter Fehler",
-            &format!("Ein interner Fehler ist aufgetreten (Thread \u{201E}{name}\u{201C}):\n\n{info}"),
+            &format!("Ein interner Fehler ist aufgetreten (Thread \u{201E}{name}\u{201C}):\n\n{info}\n\n{where_}"),
             true,
         );
     }));

@@ -38,8 +38,11 @@ todo = "warn"
 opt-level = 3
 lto = "fat"
 codegen-units = 1
-strip = true
-debug = false
+# Line tables go into a separate SpaceLens.pdb (MSVC), so crash reports show
+# file:line while the exe itself stays as small as before.
+debug = "line-tables-only"
+split-debuginfo = "packed"
+strip = "none"
 panic = "unwind"
 incremental = false
 

@@ -1,24 +1,54 @@
 # SpaceLens – Projektleitfaden
 
-Hochperformanter Disk-Analyzer für Windows (später: Aufräum-Tool). Rust-Backend,
+Hochperformanter Disk-Analyzer und Aufräum-Werkzeug für Windows. Rust-Backend,
 native Slint-Oberfläche, kein WebView. Ziel: professionelles Werkzeug, schnell,
 sparsam, stabil.
+
+## Hier anfangen (neue Sitzung)
+
+1. **`docs/STATUS.md`** – was fertig ist, was ungetestet ist, gemeldete Probleme,
+   nächste Schritte. **Immer zuerst lesen.**
+2. **`docs/DEVELOPMENT.md`** – bauen, testen, UI prüfen, alle bekannten Stolperfallen.
+3. `docs/ARCHITECTURE.md` – Aufbau, Invarianten, Messwerte. `docs/ROADMAP.md`, `CHANGELOG.md`.
+4. Bei Absturz-/Leistungsproblemen: Logs aus `%LOCALAPPDATA%\SpaceLens\logs`
+   (`crash-*.txt`, `spacelens.log` mit `langsam: …`-Zeilen) anfordern.
+
+## Arbeitsweise mit dem Nutzer
+
+- Der Nutzer ist kein Entwickler und schreibt Deutsch. Vor und während der Arbeit in
+  einfacher Sprache erklären: **was kommt, wie es in die App eingebaut wird, warum.**
+- Er erwartet ein professionelles Werkzeug: Funktionen bekommen einen geplanten Platz
+  im Layout, das Grundlegende (Laufwerk → Scannen → Sehen) bleibt schnell, alles
+  funktioniert auch in kleinen Fenstern (900×560).
+- Stabilität vor neuen Funktionen. Ehrlich berichten, was getestet ist und was nicht.
+- Nichts auslösen, was auf seinem Bildschirm Dialoge öffnet oder seine Maus bewegt,
+  ohne es anzukündigen; UAC-Abfragen vorher ankündigen.
 
 ## Aufbau
 
 ```
 crates/
-  core/   spacelens-core  Datenmodell (Tree), Builder, Aggregation, Abfragen, Formatierung.
-                          Plattformunabhängig, #![forbid(unsafe_code)], keine I/O.
-  win/    spacelens-win   Windows-Schicht: Scanner (mft/ = NTFS-MFT, walker = Verzeichnisse),
-                          Laufwerke, UAC/Rechte, Explorer.
-                          Einziger Ort mit `unsafe` (Win32 über windows-sys).
-  cli/    spacelens-cli   Headless-Scanner & Benchmark.
-  settings/ spacelens-settings  settings.json – versioniert, vorwärts-/rückwärtskompatibel
-                          (Regeln in docs/ARCHITECTURE.md; Kompatibilität nie brechen).
-  app/    spacelens       Slint-GUI (SpaceLens.exe). ui/*.slint + src/{main,app,models}.rs
-docs/     ARCHITECTURE.md (Details & Invarianten), ROADMAP.md
+  core/     spacelens-core      Datenmodell (Tree), Builder, Aggregation, Abfragen, Suche,
+                                Duplikat-Kandidaten, Aufräum-Katalog, Schutzregeln, Treemap.
+                                Plattformunabhängig, #![forbid(unsafe_code)], keine I/O.
+  win/      spacelens-win       Windows-Schicht: Scanner (mft/ = NTFS-MFT, walker),
+                                Laufwerke, UAC, Papierkorb, Duplikat-Hashing, bekannte Ordner.
+                                Einziger Ort mit `unsafe` (Win32 über windows-sys/windows).
+  settings/ spacelens-settings  settings.json – versioniert, vorwärts-/rückwärtskompatibel.
+  cli/      spacelens-cli       Headless-Scanner & Benchmark.
+  app/      spacelens           Slint-GUI (SpaceLens.exe):
+              ui/*.slint          app.slint (Fenster), table/tree/treemap/cleanup, widgets
+              src/main.rs         Start, Einstellungen laden, Panic-Hook
+              src/diag.rs         Crash-Berichte, Log langsamer UI-Aktionen
+              src/models.rs       lazy Slint-Modelle (Baum, Tabelle)
+              src/app/            Controller, ein Modul pro Bereich (scan, navigation,
+                                  delete, search_view, duplicates_view, cleanup_view,
+                                  treemap, settings, lifecycle, drives)
+docs/       STATUS, DEVELOPMENT, ARCHITECTURE, ROADMAP
 ```
+
+Neue UI-Bereiche: eigenes Modul unter `app/src/app/`, testbare Logik in `core`/`win`,
+UI-Aktionen mit `crate::diag::Timed` messen.
 
 Abhängigkeitsrichtung: `app`/`cli` → `win` → `core`. `core` kennt niemanden.
 Neue Scan-Methoden (z. B. MFT) implementieren `spacelens_core::Scanner` in `win`

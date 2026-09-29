@@ -29,6 +29,7 @@ jobs:
           $name = "SpaceLens-${{ github.ref_name }}-windows-x64"
           New-Item -ItemType Directory -Force $name | Out-Null
           Copy-Item target/release/SpaceLens.exe, target/release/spacelens-cli.exe, README.md $name/
+          Copy-Item target/release/SpaceLens.pdb $name/ -ErrorAction SilentlyContinue
           Compress-Archive -Path $name -DestinationPath "$name.zip"
           (Get-FileHash "$name.zip" -Algorithm SHA256).Hash + "  $name.zip" | Out-File -Encoding ascii "$name.zip.sha256"
       - uses: softprops/action-gh-release@v3
