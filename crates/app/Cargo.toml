@@ -29,6 +29,7 @@ slint = { workspace = true, features = [
 # HWND of the main window, so Windows dialogs (recycle-bin progress,
 # message boxes) are modal to it.
 raw-window-handle = "0.6"
+spacelens-settings.workspace = true
 
 [features]
 gpu = ["slint/renderer-femtovg"]

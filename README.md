@@ -53,6 +53,9 @@ Benchmark ohne Oberfläche:
 spacelens-cli.exe C:\ --top 10 [--method auto|walk|mft] [--threads N] [--quiet]
 ```
 
+Einstellungen (Fenstergröße, Layout, Sortierung, letzter Pfad) werden in
+`%APPDATA%\SpaceLens\settings.json` gespeichert. Löschen der Datei setzt alles zurück.
+
 ## Selbst bauen
 
 Voraussetzungen: [Rust](https://rustup.rs) (stable, MSVC) und die „Visual Studio

@@ -210,6 +210,24 @@ pub const COL_SHARE: i32 = 3;
 pub const COL_FILES: i32 = 4;
 pub const COL_MODIFIED: i32 = 5;
 
+/// Stable names for persisting the sort column (independent of UI order).
+const COLUMN_KEYS: [(i32, &str); 6] = [
+    (COL_NAME, "name"),
+    (COL_SIZE, "size"),
+    (COL_ALLOC, "alloc"),
+    (COL_SHARE, "share"),
+    (COL_FILES, "files"),
+    (COL_MODIFIED, "modified"),
+];
+
+pub fn column_key(column: i32) -> &'static str {
+    COLUMN_KEYS.iter().find(|(c, _)| *c == column).map_or("size", |(_, k)| k)
+}
+
+pub fn column_from_key(key: &str) -> i32 {
+    COLUMN_KEYS.iter().find(|(_, k)| *k == key).map_or(COL_SIZE, |(c, _)| *c)
+}
+
 pub fn sort_for_column(column: i32, descending: bool) -> Sort {
     let key = match column {
         COL_NAME => SortKey::Name,

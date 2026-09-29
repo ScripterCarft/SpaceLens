@@ -164,8 +164,9 @@ export component MainWindow inherits Window {
 
     // User-chosen sizes (splitters). The layout shrinks the panes towards
     // their minimum sizes when the window gets smaller.
-    property <length> tree-width: 320px;
-    property <length> treemap-height: 280px;
+    // in-out: persisted by the app (settings.json).
+    in-out property <length> tree-width: 320px;
+    in-out property <length> treemap-height: 280px;
 
     MenuBar {
         Menu {
@@ -335,10 +336,24 @@ export component MainWindow inherits Window {
                 Rectangle {
                     width: 5px;
                     background: vsplit.has-hover || vsplit.pressed ? Theme.bar-fill.with-alpha(0.4) : Theme.divider;
+                    // Drag math is anchored at the press: start width + distance
+                    // from the press point in window coordinates. Independent of
+                    // the splitter moving along and of layout clamping.
+                    property <length> drag-start-width;
+                    property <length> drag-start-x;
                     vsplit := TouchArea {
                         mouse-cursor: col-resize;
+                        pointer-event(event) => {
+                            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                                parent.drag-start-width = tree.width;
+                                parent.drag-start-x = self.absolute-position.x + self.mouse-x;
+                            }
+                        }
                         moved => {
-                            root.tree-width = clamp(tree.width + self.mouse-x - self.pressed-x, 190px, root.width * 0.5);
+                            root.tree-width = clamp(
+                                parent.drag-start-width + (self.absolute-position.x + self.mouse-x - parent.drag-start-x),
+                                190px,
+                                max(190px, root.width - 560px));
                         }
                     }
                 }
@@ -606,10 +621,22 @@ export component MainWindow inherits Window {
                     if root.treemap-visible: Rectangle {
                         height: 5px;
                         background: hsplit.has-hover || hsplit.pressed ? Theme.bar-fill.with-alpha(0.4) : Theme.divider;
+                        // Anchored at the press, like the tree splitter.
+                        property <length> drag-start-height;
+                        property <length> drag-start-y;
                         hsplit := TouchArea {
                             mouse-cursor: row-resize;
+                            pointer-event(event) => {
+                                if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                                    parent.drag-start-height = root.treemap-height;
+                                    parent.drag-start-y = self.absolute-position.y + self.mouse-y;
+                                }
+                            }
                             moved => {
-                                root.treemap-height = clamp(root.treemap-height - (self.mouse-y - self.pressed-y), 100px, root.height * 0.6);
+                                root.treemap-height = clamp(
+                                    parent.drag-start-height - (self.absolute-position.y + self.mouse-y - parent.drag-start-y),
+                                    100px,
+                                    max(100px, root.height - 360px));
                             }
                         }
                     }

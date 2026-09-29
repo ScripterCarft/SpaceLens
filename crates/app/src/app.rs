@@ -29,8 +29,9 @@ use spacelens_win::recycle::{self, RecycleReport};
 use spacelens_win::volumes::{self, Volume};
 use spacelens_win::{scanner_for, shell};
 
-use crate::models::{COL_NAME, EntryModel, TreeModel, sort_for_column};
+use crate::models::{COL_NAME, EntryModel, TreeModel, column_from_key, column_key, sort_for_column};
 use crate::{CleanupRow, Crumb, LegendItem, MainWindow, NavKey, TreemapLabel};
+use spacelens_settings::Settings;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// Resizing re-renders the treemap once the size has been stable this long.
@@ -131,6 +132,8 @@ struct State {
 }
 
 pub struct App {
+    settings: RefCell<Settings>,
+    settings_path: Option<PathBuf>,
     ui: slint::Weak<MainWindow>,
     tree_model: Rc<TreeModel>,
     entry_model: Rc<EntryModel>,
@@ -162,9 +165,17 @@ macro_rules! bind {
     }};
 }
 
+/// Minimum file sizes offered by the duplicate finder (combo box order).
+const DUPE_MIN_SIZES: [u64; 4] = [100 << 10, 1 << 20, 10 << 20, 100 << 20];
+
 impl App {
-    pub fn new(ui: &MainWindow, elevated: bool) -> Rc<Self> {
+    pub fn new(ui: &MainWindow, elevated: bool, settings: Settings, settings_path: Option<PathBuf>) -> Rc<Self> {
+        let sort_column = column_from_key(&settings.table.sort_column);
+        let sort_descending = settings.table.sort_descending;
+        Self::apply_settings(ui, &settings);
         let app = Rc::new(Self {
+            settings: RefCell::new(settings),
+            settings_path,
             ui: ui.as_weak(),
             tree_model: Rc::new(TreeModel::default()),
             entry_model: Rc::new(EntryModel::default()),
@@ -187,9 +198,19 @@ impl App {
                 view: View::Folder,
                 volumes: Vec::new(),
                 current: Tree::ROOT,
-                sort_column: 1,
-                sort_descending: true,
+                sort_column,
+                sort_descending,
             }),
+        });
+
+        // Closing via the title bar: persist the settings while the window
+        // still has its final size.
+        let weak = Rc::downgrade(&app);
+        ui.window().on_close_requested(move || {
+            if let Some(app) = weak.upgrade() {
+                app.save_settings();
+            }
+            slint::CloseRequestResponse::HideWindow
         });
 
         ui.set_elevated(elevated);
@@ -269,6 +290,12 @@ impl App {
             if let Some(i) = index {
                 ui.set_drive_index(i as i32);
                 ui.set_scan_path(vols[i].root.as_str().into());
+            }
+        } else {
+            // Pre-filled path (last scan): show its drive in the combo box.
+            let path = ui.get_scan_path().to_uppercase();
+            if let Some(i) = vols.iter().position(|v| path.starts_with(&v.root.to_uppercase()[..2])) {
+                ui.set_drive_index(i as i32);
             }
         }
         self.state.borrow_mut().volumes = vols;
@@ -1228,8 +1255,7 @@ impl App {
             (st.tree.clone(), st.current, st.generation)
         };
         let Some(tree) = tree else { return };
-        const MIN: [u64; 4] = [100 << 10, 1 << 20, 10 << 20, 100 << 20];
-        let min = MIN.get(ui.get_dupes_min().max(0) as usize).copied().unwrap_or(1 << 20);
+        let min = DUPE_MIN_SIZES.get(ui.get_dupes_min().max(0) as usize).copied().unwrap_or(1 << 20);
 
         // Stage 1 (same size) needs no I/O and is instant; hashing runs on a worker.
         let candidates = duplicates::candidates(&tree, root, min);
@@ -1726,8 +1752,67 @@ impl App {
     }
 
     fn quit(&self) {
+        self.save_settings();
         self.shutdown();
         let _ = slint::quit_event_loop();
+    }
+
+    // --------------------------------------------------------- settings
+
+    /// Applies persisted settings to a freshly created window.
+    fn apply_settings(ui: &MainWindow, s: &Settings) {
+        ui.window().set_size(slint::LogicalSize::new(s.window.width, s.window.height));
+        if s.window.maximized {
+            ui.window().set_maximized(true);
+        }
+        ui.set_tree_width(s.layout.tree_width);
+        ui.set_treemap_height(s.layout.treemap_height);
+        ui.set_treemap_visible(s.layout.treemap_visible);
+        let dupes = DUPE_MIN_SIZES
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, m)| m.abs_diff(s.duplicates.min_size))
+            .map_or(1, |(i, _)| i as i32);
+        ui.set_dupes_min(dupes);
+        if !s.scan.last_path.is_empty() {
+            ui.set_scan_path(s.scan.last_path.as_str().into());
+        }
+    }
+
+    /// Collects the current state into the settings and writes them.
+    /// Failures are silent: settings are a convenience, never a reason to
+    /// block closing the app.
+    pub fn save_settings(&self) {
+        let Some(ui) = self.ui() else { return };
+        let mut s = self.settings.borrow_mut();
+        let window = ui.window();
+        let maximized = window.is_maximized();
+        s.window.maximized = maximized;
+        if !maximized && !window.is_minimized() {
+            // Keep the restored size of a maximized window from the last run.
+            let size = window.size().to_logical(window.scale_factor());
+            s.window.width = size.width;
+            s.window.height = size.height;
+        }
+        s.layout.tree_width = ui.get_tree_width();
+        s.layout.treemap_height = ui.get_treemap_height();
+        s.layout.treemap_visible = ui.get_treemap_visible();
+        {
+            let st = self.state.borrow();
+            s.table.sort_column = column_key(st.sort_column).to_string();
+            s.table.sort_descending = st.sort_descending;
+        }
+        let path = ui.get_scan_path().trim().to_string();
+        if !path.is_empty() {
+            s.scan.last_path = path;
+        }
+        if let Some(&min) = DUPE_MIN_SIZES.get(ui.get_dupes_min().max(0) as usize) {
+            s.duplicates.min_size = min;
+        }
+        s.sanitize();
+        if let Some(file) = &self.settings_path {
+            let _ = s.save(file);
+        }
     }
 
     /// Stops a running scan so worker threads end promptly.

@@ -14,6 +14,8 @@ crates/
                           Laufwerke, UAC/Rechte, Explorer.
                           Einziger Ort mit `unsafe` (Win32 über windows-sys).
   cli/    spacelens-cli   Headless-Scanner & Benchmark.
+  settings/ spacelens-settings  settings.json – versioniert, vorwärts-/rückwärtskompatibel
+                          (Regeln in docs/ARCHITECTURE.md; Kompatibilität nie brechen).
   app/    spacelens       Slint-GUI (SpaceLens.exe). ui/*.slint + src/{main,app,models}.rs
 docs/     ARCHITECTURE.md (Details & Invarianten), ROADMAP.md
 ```

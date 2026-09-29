@@ -4118,6 +4118,7 @@ dependencies = [
  "slint",
  "slint-build",
  "spacelens-core",
+ "spacelens-settings",
  "spacelens-win",
 ]
 
@@ -4132,6 +4133,14 @@ dependencies = [
 [[package]]
 name = "spacelens-core"
 version = "0.1.0"
+
+[[package]]
+name = "spacelens-settings"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "spacelens-win"

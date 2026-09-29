@@ -203,6 +203,30 @@ Entf / Button / Kontextmenü
 - „Papierkorb leeren“ nutzt `SHEmptyRecycleBinW` (Windows fragt selbst) und
   entfernt danach `$Recycle.Bin`-Inhalte aus dem Baum.
 
+## Einstellungen (`crates/settings`)
+
+| Ort | Inhalt |
+|---|---|
+| `%APPDATA%\SpaceLens\settings.json` | kleine Benutzer-Einstellungen (wandert mit dem Profil) |
+| `%LOCALAPPDATA%\SpaceLens\` | reserviert für große, rechnerbezogene Daten (z. B. gespeicherte Scans); wird erst bei Bedarf angelegt |
+
+Kompatibilitätsregeln (alte und neue Versionen brechen sich nicht):
+
+1. `schema` versioniert die Datei; `migrate()` hebt ältere Layouts an.
+2. Jedes Feld hat einen Standardwert → neue Versionen lesen alte Dateien.
+3. Unbekannte Felder werden gelesen und unverändert zurückgeschrieben (`extra`,
+   flatten); `schema` sinkt nie → eine ältere Version zerstört keine neueren Werte.
+4. Stabile Namen statt UI-Indizes (Sortierspalte `"size"`, Größen in Bytes).
+5. Alle Werte werden nach dem Laden begrenzt (`sanitize`).
+6. Unlesbare Datei → `settings.json.corrupt`, App startet mit Standardwerten.
+7. Speichern atomar (temporäre Datei + Umbenennen); UTF-8-BOM (Editor) wird akzeptiert.
+
+Gespeichert werden Fenstergröße (nicht die Position – ein abgezogener Monitor würde
+das Fenster sonst unsichtbar öffnen), maximiert, Baumbreite, Treemap-Höhe und
+-Sichtbarkeit, Sortierung, letzter Pfad und Mindestgröße der Duplikat-Suche; beim
+Schließen über das X oder „Beenden“. Eigenes Crate, damit die CI die Tests ohne
+Slint ausführt.
+
 ## Build & Auslieferung
 
 - Release-Profil: `lto = "fat"`, `codegen-units = 1`, `strip`, `panic = "unwind"`
